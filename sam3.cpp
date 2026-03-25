@@ -5981,10 +5981,32 @@ bool sam3_dump_state_tensor(const sam3_state& state,
         t = state.neck_det[1];
     } else if (tensor_name == "neck_det_2") {
         t = state.neck_det[2];
+    } else if (tensor_name == "neck_det_3") {
+        t = state.neck_det[3];
+    } else if (tensor_name == "neck_trk_0") {
+        t = state.neck_trk[0];
+    } else if (tensor_name == "neck_trk_1") {
+        t = state.neck_trk[1];
+    } else if (tensor_name == "neck_trk_2") {
+        t = state.neck_trk[2];
+    } else if (tensor_name == "neck_trk_3") {
+        t = state.neck_trk[3];
+    } else if (tensor_name == "neck_det_pe_0") {
+        t = state.neck_det_pe[0];
+    } else if (tensor_name == "neck_det_pe_1") {
+        t = state.neck_det_pe[1];
+    } else if (tensor_name == "neck_det_pe_2") {
+        t = state.neck_det_pe[2];
+    } else if (tensor_name == "neck_det_pe_3") {
+        t = state.neck_det_pe[3];
     } else {
         // Search by ggml name in the context
         if (state.ctx) {
             t = ggml_get_tensor(state.ctx, tensor_name.c_str());
+        }
+        // Also search PE context
+        if (!t && state.pe_ctx) {
+            t = ggml_get_tensor(state.pe_ctx, tensor_name.c_str());
         }
     }
 

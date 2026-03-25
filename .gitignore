@@ -17,6 +17,8 @@ models/
 .DS_Store
 Thumbs.db
 
+__pycache__
+
 # IDE
 .vscode/
 .idea/
@@ -27,6 +29,6 @@ Thumbs.db
 # Test artifacts
 /tmp/
 tests/output/
-tests/ref/
+tests/ref*/
 *.jpg
 raw_weights/
