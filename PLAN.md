@@ -23,6 +23,7 @@
 14. [Implementation Order (Step-by-Step)](#14-implementation-order-step-by-step)
 15. [Appendix: Tensor Shape Reference](#15-appendix-tensor-shape-reference)
 16. [Appendix: Activation Functions Reference](#16-appendix-activation-functions-reference)
+17. [Appendix: Visual-Only Model Tensor Prefixes](#17-appendix-visual-only-model-tensor-prefixes)
 
 ---
 
@@ -65,6 +66,7 @@ SAM 3 is a ~850M parameter model that detects, segments, and tracks objects in i
 ```
 
 The model has two main paths sharing a single backbone:
+
 1. **Detector** (DETR-based): text prompt → fusion encoder → decoder → boxes + masks
 2. **Tracker** (SAM 2-based): memory bank → memory attention → SAM mask decoder → propagated masks
 
@@ -125,15 +127,15 @@ sam3.cpp/
 
 ## 3. Dependencies
 
-| Dependency | Purpose | Source |
-|---|---|---|
-| **ggml** | Tensor operations, Metal backend, graph computation | Git submodule (latest `master`) |
-| **stb_image.h** | Load PNG/JPEG images | Single header, vendored |
-| **stb_image_write.h** | Write PNG/JPEG output masks | Single header, vendored |
-| **C++14 std library** | Smart pointers, containers, algorithms | System |
-| **SDL2** (examples only) | Window creation, input handling | System package |
-| **Dear ImGui** (examples only) | GUI widgets | Vendored in `third-party/` |
-| **ffmpeg CLI** (video example) | Decode video frames to images | System, called via `popen()` |
+| Dependency                     | Purpose                                             | Source                          |
+| ------------------------------ | --------------------------------------------------- | ------------------------------- |
+| **ggml**                       | Tensor operations, Metal backend, graph computation | Git submodule (latest `master`) |
+| **stb_image.h**                | Load PNG/JPEG images                                | Single header, vendored         |
+| **stb_image_write.h**          | Write PNG/JPEG output masks                         | Single header, vendored         |
+| **C++14 std library**          | Smart pointers, containers, algorithms              | System                          |
+| **SDL2** (examples only)       | Window creation, input handling                     | System package                  |
+| **Dear ImGui** (examples only) | GUI widgets                                         | Vendored in `third-party/`      |
+| **ffmpeg CLI** (video example) | Decode video frames to images                       | System, called via `popen()`    |
 
 The **library itself** (`sam3.cpp` + `sam3.h`) depends only on ggml, stb, and std. SDL2/ImGui are only for the example executables.
 
@@ -275,6 +277,7 @@ The `.ggml` file uses a custom binary format, similar to sam.cpp but extended fo
 ```
 
 **Key design choices:**
+
 - 32-byte alignment for tensor data (enables mmap + SIMD)
 - Shape dimensions stored in reversed (column-major) order for ggml
 - Version field for future format changes
@@ -477,6 +480,7 @@ tracker.obj_ptr_tpos_proj.* → obj_ptr_tpos_proj.*
 ```
 
 **Tensors to SKIP** (training-only, not needed for inference):
+
 - Any tensor containing `loss`, `criterion`, `_dn_`, `label_enc`
 - `dac_` prefixed tensors (DAC dual supervision heads)
 - `semantic_seg_head` (semantic segmentation, separate from instance)
@@ -1761,187 +1765,187 @@ Output:
 
 ### 10.1 Public API Functions (declared in `sam3.h`)
 
-| Function | Description |
-|---|---|
-| `sam3_load_model()` | Load ggml binary, allocate backend buffer, populate model tensors |
-| `sam3_create_state()` | Allocate computation state (graph allocator, intermediate buffers) |
-| `sam3_encode_image()` | Run ViT backbone + neck on an image (caches features in state) |
-| `sam3_segment_pcs()` | Run text encoder + fusion encoder + DETR decoder + seg head |
-| `sam3_segment_pvs()` | Run SAM prompt encoder + mask decoder for single instance |
-| `sam3_create_tracker()` | Initialize video tracker state |
-| `sam3_track_frame()` | Process one video frame (detect + track + memory update) |
-| `sam3_refine_instance()` | Add click refinement to a tracked instance |
-| `sam3_tracker_frame_index()` | Get current frame index |
-| `sam3_tracker_reset()` | Reset tracker for new video |
-| `sam3_free_model()` | Free model resources |
-| `sam3_free_state()` | Free state resources |
-| `sam3_load_image()` | Load image from file (stb_image) |
-| `sam3_save_mask()` | Save mask to PNG (stb_image_write) |
-| `sam3_decode_video_frame()` | Decode single video frame via ffmpeg |
-| `sam3_get_video_info()` | Get video metadata via ffmpeg |
+| Function                     | Description                                                        |
+| ---------------------------- | ------------------------------------------------------------------ |
+| `sam3_load_model()`          | Load ggml binary, allocate backend buffer, populate model tensors  |
+| `sam3_create_state()`        | Allocate computation state (graph allocator, intermediate buffers) |
+| `sam3_encode_image()`        | Run ViT backbone + neck on an image (caches features in state)     |
+| `sam3_segment_pcs()`         | Run text encoder + fusion encoder + DETR decoder + seg head        |
+| `sam3_segment_pvs()`         | Run SAM prompt encoder + mask decoder for single instance          |
+| `sam3_create_tracker()`      | Initialize video tracker state                                     |
+| `sam3_track_frame()`         | Process one video frame (detect + track + memory update)           |
+| `sam3_refine_instance()`     | Add click refinement to a tracked instance                         |
+| `sam3_tracker_frame_index()` | Get current frame index                                            |
+| `sam3_tracker_reset()`       | Reset tracker for new video                                        |
+| `sam3_free_model()`          | Free model resources                                               |
+| `sam3_free_state()`          | Free state resources                                               |
+| `sam3_load_image()`          | Load image from file (stb_image)                                   |
+| `sam3_save_mask()`           | Save mask to PNG (stb_image_write)                                 |
+| `sam3_decode_video_frame()`  | Decode single video frame via ffmpeg                               |
+| `sam3_get_video_info()`      | Get video metadata via ffmpeg                                      |
 
 ### 10.2 Internal Functions (defined in `sam3.cpp`)
 
 #### Model Loading
 
-| Function | Description |
-|---|---|
-| `sam3_load_hparams(fin, hparams)` | Read hyperparameters from file header |
-| `sam3_load_tensors(fin, model)` | Read all tensor records, allocate via ggml_allocr |
-| `sam3_init_backend(model, params)` | Initialize ggml backend (Metal or CPU) |
-| `sam3_precompute_rope(model)` | Precompute 2D axial RoPE frequency table |
-| `sam3_load_bpe_vocab(tokenizer)` | Load BPE vocabulary (embedded or from file) |
+| Function                           | Description                                       |
+| ---------------------------------- | ------------------------------------------------- |
+| `sam3_load_hparams(fin, hparams)`  | Read hyperparameters from file header             |
+| `sam3_load_tensors(fin, model)`    | Read all tensor records, allocate via ggml_allocr |
+| `sam3_init_backend(model, params)` | Initialize ggml backend (Metal or CPU)            |
+| `sam3_precompute_rope(model)`      | Precompute 2D axial RoPE frequency table          |
+| `sam3_load_bpe_vocab(tokenizer)`   | Load BPE vocabulary (embedded or from file)       |
 
 #### Image Preprocessing
 
-| Function | Description |
-|---|---|
-| `sam3_preprocess_image(img, ctx)` | Resize + normalize → ggml tensor [1,3,1008,1008] |
-| `sam3_preprocess_to_f32(img)` | Convert sam3_image to internal float32 representation |
+| Function                          | Description                                           |
+| --------------------------------- | ----------------------------------------------------- |
+| `sam3_preprocess_image(img, ctx)` | Resize + normalize → ggml tensor [1,3,1008,1008]      |
+| `sam3_preprocess_to_f32(img)`     | Convert sam3_image to internal float32 representation |
 
 #### Backbone
 
-| Function | Description |
-|---|---|
-| `sam3_build_vit_graph(ctx, model, state, input)` | Build ggml graph for full ViT forward |
-| `sam3_vit_block_forward(ctx, model, block, x, layer_idx)` | Single ViT block forward |
-| `sam3_vit_attention(ctx, model, block, x, is_global)` | Multi-head attention with RoPE |
-| `sam3_window_partition(ctx, x, window_size)` | Partition tensor into windows |
-| `sam3_window_unpartition(ctx, x, window_size, hw)` | Reverse window partition |
-| `sam3_apply_rope_2d(ctx, q, k, rope_freqs, n_heads, hw)` | Apply 2D axial RoPE |
-| `sam3_build_neck_graph(ctx, model, vit_out, det_or_trk)` | Build SimpleFPN graph |
+| Function                                                  | Description                           |
+| --------------------------------------------------------- | ------------------------------------- |
+| `sam3_build_vit_graph(ctx, model, state, input)`          | Build ggml graph for full ViT forward |
+| `sam3_vit_block_forward(ctx, model, block, x, layer_idx)` | Single ViT block forward              |
+| `sam3_vit_attention(ctx, model, block, x, is_global)`     | Multi-head attention with RoPE        |
+| `sam3_window_partition(ctx, x, window_size)`              | Partition tensor into windows         |
+| `sam3_window_unpartition(ctx, x, window_size, hw)`        | Reverse window partition              |
+| `sam3_apply_rope_2d(ctx, q, k, rope_freqs, n_heads, hw)`  | Apply 2D axial RoPE                   |
+| `sam3_build_neck_graph(ctx, model, vit_out, det_or_trk)`  | Build SimpleFPN graph                 |
 
 #### Text Encoder
 
-| Function | Description |
-|---|---|
-| `sam3_tokenize(tokenizer, text)` | BPE tokenize a string → vector<int32_t> |
-| `sam3_bpe_encode(tokenizer, word)` | BPE merge loop for single word |
-| `sam3_build_text_encoder_graph(ctx, model, token_ids)` | Build text encoder ggml graph |
-| `sam3_build_causal_mask(ctx, seq_len)` | Build lower-triangular attention mask |
+| Function                                               | Description                             |
+| ------------------------------------------------------ | --------------------------------------- |
+| `sam3_tokenize(tokenizer, text)`                       | BPE tokenize a string → vector<int32_t> |
+| `sam3_bpe_encode(tokenizer, word)`                     | BPE merge loop for single word          |
+| `sam3_build_text_encoder_graph(ctx, model, token_ids)` | Build text encoder ggml graph           |
+| `sam3_build_causal_mask(ctx, seq_len)`                 | Build lower-triangular attention mask   |
 
 #### Geometry / Exemplar Encoder
 
-| Function | Description |
-|---|---|
-| `sam3_build_geom_encoder_graph(ctx, model, boxes, labels, backbone_feats)` | Encode exemplars |
-| `sam3_roi_pool(ctx, features, box, output_size)` | ROI-align from feature map |
-| `sam3_sinusoidal_pe_2d(ctx, coords, num_feats)` | 2D sinusoidal positional encoding |
+| Function                                                                   | Description                       |
+| -------------------------------------------------------------------------- | --------------------------------- |
+| `sam3_build_geom_encoder_graph(ctx, model, boxes, labels, backbone_feats)` | Encode exemplars                  |
+| `sam3_roi_pool(ctx, features, box, output_size)`                           | ROI-align from feature map        |
+| `sam3_sinusoidal_pe_2d(ctx, coords, num_feats)`                            | 2D sinusoidal positional encoding |
 
 #### Fusion Encoder
 
-| Function | Description |
-|---|---|
-| `sam3_build_fenc_graph(ctx, model, image_feats, prompt_tokens, pos_enc)` | Fusion encoder |
-| `sam3_fenc_layer_forward(ctx, model, layer, x, prompt, pos)` | Single fusion layer |
+| Function                                                                 | Description         |
+| ------------------------------------------------------------------------ | ------------------- |
+| `sam3_build_fenc_graph(ctx, model, image_feats, prompt_tokens, pos_enc)` | Fusion encoder      |
+| `sam3_fenc_layer_forward(ctx, model, layer, x, prompt, pos)`             | Single fusion layer |
 
 #### DETR Decoder
 
-| Function | Description |
-|---|---|
-| `sam3_build_ddec_graph(ctx, model, enc_feats, text_feats, pos_enc)` | Full DETR decoder |
-| `sam3_ddec_layer_forward(ctx, model, layer, queries, enc_feats, text_feats, ref_boxes)` | Single decoder layer |
-| `sam3_box_refine(ctx, model, layer, queries, ref_boxes)` | Iterative box refinement |
-| `sam3_inverse_sigmoid(ctx, x)` | Inverse sigmoid: log(x / (1-x)) |
-| `sam3_compute_box_rpb(ctx, ref_boxes, feat_hw)` | Box-relative positional bias |
-| `sam3_dot_product_scoring(ctx, model, queries, text_feats)` | Classification via dot product |
+| Function                                                                                | Description                     |
+| --------------------------------------------------------------------------------------- | ------------------------------- |
+| `sam3_build_ddec_graph(ctx, model, enc_feats, text_feats, pos_enc)`                     | Full DETR decoder               |
+| `sam3_ddec_layer_forward(ctx, model, layer, queries, enc_feats, text_feats, ref_boxes)` | Single decoder layer            |
+| `sam3_box_refine(ctx, model, layer, queries, ref_boxes)`                                | Iterative box refinement        |
+| `sam3_inverse_sigmoid(ctx, x)`                                                          | Inverse sigmoid: log(x / (1-x)) |
+| `sam3_compute_box_rpb(ctx, ref_boxes, feat_hw)`                                         | Box-relative positional bias    |
+| `sam3_dot_product_scoring(ctx, model, queries, text_feats)`                             | Classification via dot product  |
 
 #### Segmentation Head
 
-| Function | Description |
-|---|---|
-| `sam3_build_seg_head_graph(ctx, model, fpn_feats, query_outputs)` | Mask prediction |
-| `sam3_pixel_decoder(ctx, model, fpn_feats)` | Upsample FPN features |
-| `sam3_mask_predict(ctx, query_embeds, pixel_feats)` | Einsum for per-instance masks |
+| Function                                                          | Description                   |
+| ----------------------------------------------------------------- | ----------------------------- |
+| `sam3_build_seg_head_graph(ctx, model, fpn_feats, query_outputs)` | Mask prediction               |
+| `sam3_pixel_decoder(ctx, model, fpn_feats)`                       | Upsample FPN features         |
+| `sam3_mask_predict(ctx, query_embeds, pixel_feats)`               | Einsum for per-instance masks |
 
 #### SAM Prompt Encoder (Tracker)
 
-| Function | Description |
-|---|---|
-| `sam3_build_sam_pe_graph(ctx, model, points, labels, box, mask)` | SAM prompt encoding |
-| `sam3_pe_random_encode(ctx, model, coords)` | Random Fourier feature PE |
+| Function                                                         | Description               |
+| ---------------------------------------------------------------- | ------------------------- |
+| `sam3_build_sam_pe_graph(ctx, model, points, labels, box, mask)` | SAM prompt encoding       |
+| `sam3_pe_random_encode(ctx, model, coords)`                      | Random Fourier feature PE |
 
 #### SAM Mask Decoder (Tracker)
 
-| Function | Description |
-|---|---|
-| `sam3_build_sam_dec_graph(ctx, model, img_embed, sparse, dense, high_res)` | Full mask decoder |
-| `sam3_twoway_block_forward(ctx, model, block, tokens, src, token_pe, src_pe, first_layer)` | Single 2-way block |
-| `sam3_sam_attention(ctx, attn, q, k, v)` | Attention with optional downsample |
-| `sam3_upscale_masks(ctx, model, src, high_res_feats)` | Transpose conv upscaling |
-| `sam3_hypernetwork_mlp(ctx, model, mask_idx, token)` | Per-mask hypernetwork |
-| `sam3_select_best_mask(masks, iou_pred, stability_delta, stability_thresh)` | Dynamic mask selection |
+| Function                                                                                   | Description                        |
+| ------------------------------------------------------------------------------------------ | ---------------------------------- |
+| `sam3_build_sam_dec_graph(ctx, model, img_embed, sparse, dense, high_res)`                 | Full mask decoder                  |
+| `sam3_twoway_block_forward(ctx, model, block, tokens, src, token_pe, src_pe, first_layer)` | Single 2-way block                 |
+| `sam3_sam_attention(ctx, attn, q, k, v)`                                                   | Attention with optional downsample |
+| `sam3_upscale_masks(ctx, model, src, high_res_feats)`                                      | Transpose conv upscaling           |
+| `sam3_hypernetwork_mlp(ctx, model, mask_idx, token)`                                       | Per-mask hypernetwork              |
+| `sam3_select_best_mask(masks, iou_pred, stability_delta, stability_thresh)`                | Dynamic mask selection             |
 
 #### Memory Encoder
 
-| Function | Description |
-|---|---|
-| `sam3_build_mem_enc_graph(ctx, model, pixel_feats, mask_logits)` | Memory encoding |
-| `sam3_mask_downsample(ctx, model, mask)` | Conv stack to downsample mask |
-| `sam3_cxblock(ctx, model, x, block_idx)` | CXBlock (depthwise conv + FFN + LayerScale) |
+| Function                                                         | Description                                 |
+| ---------------------------------------------------------------- | ------------------------------------------- |
+| `sam3_build_mem_enc_graph(ctx, model, pixel_feats, mask_logits)` | Memory encoding                             |
+| `sam3_mask_downsample(ctx, model, mask)`                         | Conv stack to downsample mask               |
+| `sam3_cxblock(ctx, model, x, block_idx)`                         | CXBlock (depthwise conv + FFN + LayerScale) |
 
 #### Memory Attention
 
-| Function | Description |
-|---|---|
-| `sam3_build_mem_attn_graph(ctx, model, curr_feats, memories, obj_ptrs)` | Memory cross-attention |
-| `sam3_mem_attn_layer_forward(ctx, model, layer, x, prompt, pos)` | Single memory attention layer |
-| `sam3_rope_attention(ctx, q, k, v, rope_freqs, feat_hw, is_cross)` | RoPE attention (1 head) |
+| Function                                                                | Description                   |
+| ----------------------------------------------------------------------- | ----------------------------- |
+| `sam3_build_mem_attn_graph(ctx, model, curr_feats, memories, obj_ptrs)` | Memory cross-attention        |
+| `sam3_mem_attn_layer_forward(ctx, model, layer, x, prompt, pos)`        | Single memory attention layer |
+| `sam3_rope_attention(ctx, q, k, v, rope_freqs, feat_hw, is_cross)`      | RoPE attention (1 head)       |
 
 #### Video Tracking Logic
 
-| Function | Description |
-|---|---|
-| `sam3_detect_frame(state, model, tracker)` | Run detector on current frame |
-| `sam3_propagate_masklets(state, model, tracker)` | Propagate all tracked masklets |
-| `sam3_propagate_single(state, model, tracker, masklet)` | Propagate one masklet |
-| `sam3_match_detections(tracker, detections, propagated)` | IoU-based matching |
-| `sam3_update_tracker(tracker, matched, unmatched_det, unmatched_trk)` | Update tracker state |
-| `sam3_update_memory(state, model, tracker, masklet)` | Encode + store memory for one masklet |
-| `sam3_extract_obj_ptr(model, sam_output_token, obj_score)` | Extract object pointer |
-| `sam3_apply_hotstart(tracker)` | Apply hotstart delay logic |
-| `sam3_check_confirmation(tracker)` | Check confirmation window criteria |
-| `sam3_remove_duplicates(tracker)` | Remove duplicate masklets |
-| `sam3_suppress_masklets(tracker)` | Suppress unconfirmed masklets (MDS < 0) |
-| `sam3_recondition_masklets(state, model, tracker)` | Re-prompt from high-confidence detections |
-| `sam3_detection_guided_reprompt(state, model, tracker)` | Re-prompt from drifted predictions |
-| `sam3_apply_non_overlapping(masks)` | Enforce non-overlapping multi-object masks |
-| `sam3_select_memory_frames(tracker, masklet)` | Select best memory frames for attention |
+| Function                                                              | Description                                |
+| --------------------------------------------------------------------- | ------------------------------------------ |
+| `sam3_detect_frame(state, model, tracker)`                            | Run detector on current frame              |
+| `sam3_propagate_masklets(state, model, tracker)`                      | Propagate all tracked masklets             |
+| `sam3_propagate_single(state, model, tracker, masklet)`               | Propagate one masklet                      |
+| `sam3_match_detections(tracker, detections, propagated)`              | IoU-based matching                         |
+| `sam3_update_tracker(tracker, matched, unmatched_det, unmatched_trk)` | Update tracker state                       |
+| `sam3_update_memory(state, model, tracker, masklet)`                  | Encode + store memory for one masklet      |
+| `sam3_extract_obj_ptr(model, sam_output_token, obj_score)`            | Extract object pointer                     |
+| `sam3_apply_hotstart(tracker)`                                        | Apply hotstart delay logic                 |
+| `sam3_check_confirmation(tracker)`                                    | Check confirmation window criteria         |
+| `sam3_remove_duplicates(tracker)`                                     | Remove duplicate masklets                  |
+| `sam3_suppress_masklets(tracker)`                                     | Suppress unconfirmed masklets (MDS < 0)    |
+| `sam3_recondition_masklets(state, model, tracker)`                    | Re-prompt from high-confidence detections  |
+| `sam3_detection_guided_reprompt(state, model, tracker)`               | Re-prompt from drifted predictions         |
+| `sam3_apply_non_overlapping(masks)`                                   | Enforce non-overlapping multi-object masks |
+| `sam3_select_memory_frames(tracker, masklet)`                         | Select best memory frames for attention    |
 
 #### Post-Processing
 
-| Function | Description |
-|---|---|
-| `sam3_nms(detections, iou_threshold)` | Non-maximum suppression on boxes |
-| `sam3_fill_holes(mask, area_threshold)` | Fill small holes in binary mask |
-| `sam3_remove_sprinkles(mask, area_threshold)` | Remove small disconnected regions |
-| `sam3_connected_components(mask)` | Connected components labeling |
-| `sam3_compute_iou(mask_a, mask_b)` | IoU between two masks |
-| `sam3_compute_iom(mask_a, mask_b)` | Intersection-over-Minimum |
-| `sam3_stability_score(mask_logits, delta)` | Mask stability score |
-| `sam3_bilinear_interpolate(mask, target_h, target_w)` | Bilinear upsampling |
+| Function                                              | Description                       |
+| ----------------------------------------------------- | --------------------------------- |
+| `sam3_nms(detections, iou_threshold)`                 | Non-maximum suppression on boxes  |
+| `sam3_fill_holes(mask, area_threshold)`               | Fill small holes in binary mask   |
+| `sam3_remove_sprinkles(mask, area_threshold)`         | Remove small disconnected regions |
+| `sam3_connected_components(mask)`                     | Connected components labeling     |
+| `sam3_compute_iou(mask_a, mask_b)`                    | IoU between two masks             |
+| `sam3_compute_iom(mask_a, mask_b)`                    | Intersection-over-Minimum         |
+| `sam3_stability_score(mask_logits, delta)`            | Mask stability score              |
+| `sam3_bilinear_interpolate(mask, target_h, target_w)` | Bilinear upsampling               |
 
 #### Utility Functions
 
-| Function | Description |
-|---|---|
-| `sam3_layer_norm(ctx, x, w, b)` | LayerNorm operation |
-| `sam3_layer_norm_2d(ctx, x, w, b)` | LayerNorm2d for [B,C,H,W] tensors |
-| `sam3_mlp(ctx, x, w1, b1, w2, b2, act)` | 2-layer MLP with activation |
-| `sam3_mlp_3layer(ctx, x, w, b, act)` | 3-layer MLP (arrays of 3 weights/biases) |
-| `sam3_multihead_attention(ctx, q, k, v, n_heads, mask)` | Multi-head attention |
-| `sam3_sigmoid(ctx, x)` | Element-wise sigmoid |
-| `sam3_conv2d(ctx, x, w, b, stride, padding)` | 2D convolution wrapper |
-| `sam3_conv_transpose2d(ctx, x, w, b, stride)` | Transposed 2D convolution |
-| `sam3_maxpool2d(ctx, x, kernel, stride)` | Max pooling |
+| Function                                                | Description                              |
+| ------------------------------------------------------- | ---------------------------------------- |
+| `sam3_layer_norm(ctx, x, w, b)`                         | LayerNorm operation                      |
+| `sam3_layer_norm_2d(ctx, x, w, b)`                      | LayerNorm2d for [B,C,H,W] tensors        |
+| `sam3_mlp(ctx, x, w1, b1, w2, b2, act)`                 | 2-layer MLP with activation              |
+| `sam3_mlp_3layer(ctx, x, w, b, act)`                    | 3-layer MLP (arrays of 3 weights/biases) |
+| `sam3_multihead_attention(ctx, q, k, v, n_heads, mask)` | Multi-head attention                     |
+| `sam3_sigmoid(ctx, x)`                                  | Element-wise sigmoid                     |
+| `sam3_conv2d(ctx, x, w, b, stride, padding)`            | 2D convolution wrapper                   |
+| `sam3_conv_transpose2d(ctx, x, w, b, stride)`           | Transposed 2D convolution                |
+| `sam3_maxpool2d(ctx, x, kernel, stride)`                | Max pooling                              |
 
 #### Graph Execution Helpers
 
-| Function | Description |
-|---|---|
-| `sam3_graph_compute(backend, graph, n_threads)` | Execute ggml graph |
-| `sam3_alloc_graph(galloc, graph)` | Allocate graph with gallocr |
-| `sam3_measure_graph(ctx, build_fn)` | Measure graph memory requirements |
+| Function                                        | Description                       |
+| ----------------------------------------------- | --------------------------------- |
+| `sam3_graph_compute(backend, graph, n_threads)` | Execute ggml graph                |
+| `sam3_alloc_graph(galloc, graph)`               | Allocate graph with gallocr       |
+| `sam3_measure_graph(ctx, build_fn)`             | Measure graph memory requirements |
 
 ---
 
@@ -2113,6 +2117,7 @@ To ensure numerical correctness, we implement a rigorous layer-by-layer verifica
 ### 12.2 Setup Scripts
 
 **`scripts/setup_test_env.sh`:**
+
 ```bash
 #!/bin/bash
 # Clone official SAM3 repo
@@ -2125,6 +2130,7 @@ python -c "from sam3.model_builder import download_ckpt_from_hf; download_ckpt_f
 ```
 
 **`scripts/download_model.sh`:**
+
 ```bash
 #!/bin/bash
 # Download SAM3 checkpoint from HuggingFace
@@ -2152,6 +2158,7 @@ Per tensor file (.bin):
 File naming convention: `{module}_{layer}_{op}_{step}.bin`
 
 Examples:
+
 - `vit_block_00_norm1_output.bin`
 - `vit_block_00_attn_qkv.bin`
 - `vit_block_00_attn_rope_q.bin`
@@ -2286,6 +2293,7 @@ def compare(py_dir, cpp_dir, tol=1e-5):
 Each test script focuses on a single module, running it in isolation:
 
 **`tests/test_image_encoder.py`:**
+
 - Load SAM3 model
 - Feed a fixed random input `[1, 3, 1008, 1008]`
 - Run only the ViT backbone
@@ -2293,60 +2301,68 @@ Each test script focuses on a single module, running it in isolation:
 - Verify against C++ output for the same input
 
 **`tests/test_text_encoder.py`:**
+
 - Tokenize a fixed string "a red car on the road"
 - Run text encoder, dump all intermediate tensors
 - Verify causal mask, attention patterns, final features
 
 **`tests/test_prompt_encoder.py`:**
+
 - Feed fixed points [(100, 200, label=1), (300, 400, label=0)]
 - Run SAM prompt encoder
 - Dump sparse + dense embeddings
 
 **`tests/test_mask_decoder.py`:**
+
 - Feed fixed image embedding (random or from backbone)
 - Feed fixed sparse/dense prompt embeddings
 - Run SAM mask decoder
 - Dump: all two-way block intermediates, upscaled features, hypernetwork outputs, final masks
 
 **`tests/test_fusion_encoder.py`:**
+
 - Feed fixed backbone features + text features
 - Run 6-layer fusion encoder
 - Dump each layer's SA, CA, FFN outputs
 
 **`tests/test_detr_decoder.py`:**
+
 - Feed fixed encoded features + text features
 - Run 6-layer DETR decoder with queries
 - Dump each layer + box refinement + classification scores
 
 **`tests/test_memory_encoder.py`:**
+
 - Feed fixed pixel features + mask logits
 - Run memory encoder
 - Dump: mask downsample stages, fuser outputs, final 64-dim features
 
 **`tests/test_memory_attention.py`:**
+
 - Feed fixed current features + synthetic memory tensors
 - Run 4-layer memory attention
 - Dump: each layer's SA (with RoPE), CA, FFN outputs
 
 **`tests/test_end_to_end.py`:**
+
 - Full pipeline: image → text prompt → detected masks
 - Compare final detection boxes, scores, masks
 - For video: process 5 frames, compare all masklet outputs per frame
 
 ### 12.8 Tolerances
 
-| Module | Expected max abs error | Notes |
-|---|---|---|
-| Patch embed | < 1e-6 | Simple conv, should be exact |
-| ViT blocks 0-7 | < 1e-5 | Errors may accumulate slightly |
-| ViT blocks 8-31 | < 1e-4 | Accumulated through 32 layers |
-| Text encoder | < 1e-5 | Independent path |
-| Fusion encoder | < 1e-4 | Cross-attention may introduce variance |
-| DETR decoder | < 1e-4 | Box refinement is iterative sigmoid |
-| SAM mask decoder | < 1e-4 | 2 layers, relatively shallow |
-| Memory attention | < 1e-4 | RoPE + cross-attention |
-| Final masks (logits) | < 1e-3 | Accumulated from all modules |
-| Final masks (binary) | Exact match | After thresholding |
+| Module               | Expected max abs error | Notes                                  |
+| -------------------- | ---------------------- | -------------------------------------- |
+| Patch embed          | < 1e-6                 | Simple conv, should be exact           |
+| ViT blocks 0-7       | < 1e-5                 | Errors may accumulate slightly         |
+| ViT blocks 8-31      | < 1e-4                 | Accumulated through 32 layers          |
+| Text encoder         | < 1e-5                 | Independent path                       |
+| Fusion encoder       | < 1e-4                 | Cross-attention may introduce variance |
+| DETR decoder         | < 1e-4                 | Box refinement is iterative sigmoid    |
+| SAM mask decoder     | < 1e-4                 | 2 layers, relatively shallow           |
+| Memory attention     | < 1e-4                 | RoPE + cross-attention                 |
+| Final masks (logits) | < 1e-3                 | Accumulated from all modules           |
+| Final masks (binary) | Exact match            | After thresholding                     |
 
 ### 12.9 Numerical Debugging Checklist
 
@@ -2395,6 +2411,7 @@ Main loop:
 ```
 
 **UI Layout:**
+
 ```
 ┌────────────────────────────────────────────────┐
 │ [Text prompt: ___________]  [Segment]  [Clear] │
@@ -2443,6 +2460,7 @@ Main loop:
 **Video decoding:** Use `popen("ffmpeg -i video.mp4 -f rawvideo -pix_fmt rgb24 -", "r")` to pipe decoded frames. This avoids adding ffmpeg as a library dependency.
 
 **UI Layout:**
+
 ```
 ┌────────────────────────────────────────────────┐
 │ [Text: ________]  [▶ Play] [⏸ Pause] [⏭ Step] │
@@ -2476,6 +2494,7 @@ This section defines the exact order in which to implement, from zero to a worki
 ### Phase 0: Project Setup
 
 **Step 0.1: Repository initialization**
+
 - Create directory structure as defined in Section 2
 - `git init`
 - Add ggml as git submodule: `git submodule add https://github.com/ggerganov/ggml.git`
@@ -2484,6 +2503,7 @@ This section defines the exact order in which to implement, from zero to a worki
 - Verify `cmake .. && make` builds ggml successfully
 
 **Step 0.2: Skeleton files**
+
 - Create `sam3.h` with all public struct definitions and function declarations (Section 7)
 - Create `sam3.cpp` with all internal struct definitions (Section 8) and empty function stubs
 - Verify compilation
@@ -2491,11 +2511,13 @@ This section defines the exact order in which to implement, from zero to a worki
 ### Phase 1: Weight Conversion
 
 **Step 1.1: Download checkpoint**
+
 - Write `scripts/download_model.sh`
 - Download `sam3.pt` from HuggingFace
 - Inspect checkpoint keys: `python -c "import torch; ckpt = torch.load('sam3.pt'); [print(k, v.shape) for k, v in ckpt.items()]"`
 
 **Step 1.2: Write conversion script**
+
 - Implement `convert_sam3_to_ggml.py` (Section 6)
 - Map all PyTorch tensor names to ggml names
 - Write binary file in format defined in Section 5
@@ -2503,6 +2525,7 @@ This section defines the exact order in which to implement, from zero to a worki
 - Expected output: `sam3.ggml` (~1.6 GB for f16, ~3.2 GB for f32)
 
 **Step 1.3: Implement model loading in C++**
+
 - Implement `sam3_load_hparams()`
 - Implement `sam3_load_tensors()`
 - Implement `sam3_init_backend()` (Metal on macOS, CPU fallback)
@@ -2512,60 +2535,72 @@ This section defines the exact order in which to implement, from zero to a worki
 ### Phase 2: BPE Tokenizer
 
 **Step 2.1: Embed vocabulary**
-- Extract BPE merges from SAM3's `bpe_simple_vocab_16e6.txt.gz`
+
+- Extract BPE merges from SAM3's `bpe_simple_vocab_16e6.txt.gz` (or use merges.txt)
 - Either embed directly in `sam3.cpp` as a compressed byte array, or load from file
 - Implement `sam3_load_bpe_vocab()`
 - Implement `sam3_bpe_encode()` and `sam3_tokenize()`
 
 **Step 2.2: Verify tokenizer**
+
 - Test with 20+ strings, compare against Python's `SimpleTokenizer`
 - Ensure SOT/EOT tokens, padding, truncation all match
 
 ### Phase 3: Image Encoder (ViT Backbone)
 
 **Step 3.1: Preprocessing**
+
 - Implement `sam3_preprocess_image()`: resize to 1008×1008, normalize
 - Implement `sam3_load_image()` using stb_image
 - **Verify:** Dump preprocessed tensor, compare against PyTorch preprocessing
 
 **Step 3.2: Patch embedding**
+
 - Implement patch embed as `ggml_conv_2d` with kernel=stride=14
 - **Verify:** Compare output against PyTorch patch_embed
 
 **Step 3.3: Positional embedding**
+
 - Handle tiled positional embedding (from 24×24 pretrained to 72×72)
 - The conversion script should handle interpolation; C++ just loads and adds
 - **Verify:** Check pos_embed values match
 
 **Step 3.4: RoPE precomputation**
+
 - Implement `sam3_precompute_rope()`: compute 2D axial frequency table [5184, 64]
 - **Verify:** Compare against PyTorch's `compute_axial_cis()`
 
 **Step 3.5: Window partition/unpartition**
+
 - Implement using `ggml_view` + `ggml_permute` (or `ggml_win_part`/`ggml_win_unpart` if available)
 - **Verify:** Round-trip test (partition → unpartition = identity)
 
 **Step 3.6: Single ViT block**
+
 - Implement `sam3_vit_block_forward()`: norm → attn (with RoPE) → residual → norm → MLP → residual
 - Handle both window attention (24×24 windows) and global attention
 - **Verify:** Compare block 0 output against PyTorch
 
 **Step 3.7: Full ViT forward**
+
 - Implement `sam3_build_vit_graph()`: ln_pre → 32 blocks → final permute
 - **Verify:** Compare full ViT output [1, 1024, 72, 72] against PyTorch
 
 **Step 3.8: Neck (SimpleFPN)**
+
 - Implement `sam3_build_neck_graph()` for both detector and tracker paths
 - ConvTranspose2d for upsampling, Conv1x1 + Conv3x3 for refinement
 - **Verify:** Compare each scale level output against PyTorch
 
 **Step 3.9: Positional encoding (sinusoidal)**
+
 - Implement `sam3_sinusoidal_pe_2d()` for neck feature maps
 - **Verify:** Compare against PyTorch PositionEmbeddingSine
 
 ### Phase 4: Text Encoder
 
 **Step 4.1: Text encoder forward**
+
 - Implement `sam3_build_text_encoder_graph()`
 - 24 blocks: causal MHA + LayerScale + MLP + LayerScale
 - Build causal mask (lower triangular)
@@ -2575,11 +2610,13 @@ This section defines the exact order in which to implement, from zero to a worki
 ### Phase 5: Detector (Image PCS)
 
 **Step 5.1: Fusion encoder**
+
 - Implement `sam3_build_fenc_graph()`: 6 layers of SA + CA + FFN
 - Pre-norm architecture with cross-attention to text tokens
 - **Verify:** Compare each layer output
 
 **Step 5.2: DETR decoder**
+
 - Implement `sam3_build_ddec_graph()`: query init, 6 layers, box refinement
 - Box refinement: inverse_sigmoid + delta + sigmoid
 - DotProductScoring for classification
@@ -2587,70 +2624,84 @@ This section defines the exact order in which to implement, from zero to a worki
 - **Verify:** Compare predicted boxes, scores, presence
 
 **Step 5.3: Segmentation head**
+
 - Implement `sam3_build_seg_head_graph()`: pixel decoder + mask prediction
 - Einsum of query embeddings × pixel features → per-instance masks
 - **Verify:** Compare mask logits
 
 **Step 5.4: Post-processing**
+
 - Implement NMS, score thresholding, mask binarization
 - Implement bilinear interpolation to original size
 - **Verify:** Compare final detections (boxes, masks, scores) end-to-end
 
 **Step 5.5: Geometry / Exemplar encoder (optional at this stage)**
+
 - Implement for image exemplar support
 - ROI pooling, coordinate embedding, type embedding, 3-layer transformer
 - **Verify:** Compare exemplar-conditioned detection results
 
 **Step 5.6: Wire up `sam3_segment_pcs()`**
+
 - Connect: text encode → fusion encode → DETR decode → seg head → post-process
 - **Milestone:** Can segment images with text prompts!
 
 ### Phase 6: SAM-style Visual Prompting (Image PVS)
 
 **Step 6.1: SAM prompt encoder**
+
 - Implement `sam3_build_sam_pe_graph()`: point/box encoding with random Fourier PE
 - **Verify:** Compare sparse + dense embeddings
 
 **Step 6.2: SAM mask decoder**
+
 - Implement `sam3_build_sam_dec_graph()`: TwoWayTransformer + upscaling + hypernetwork
 - **Verify:** Compare masks, IoU predictions, object scores
 
 **Step 6.3: Wire up `sam3_segment_pvs()`**
+
 - Connect: SAM prompt encode → (backbone features from state) → mask decode → post-process
 - **Milestone:** Can segment with clicks/boxes on images!
 
 ### Phase 7: Video Tracking
 
 **Step 7.1: Memory encoder**
+
 - Implement `sam3_build_mem_enc_graph()`: mask downsample + fuser + projection
 - **Verify:** Compare memory features
 
 **Step 7.2: Memory attention**
+
 - Implement `sam3_build_mem_attn_graph()`: 4-layer transformer with RoPE cross-attention
 - Implement `sam3_rope_attention()` with kv_in_dim=64 and rope_k_repeat
 - **Verify:** Compare conditioned features
 
 **Step 7.3: Object pointer extraction**
+
 - Implement `sam3_extract_obj_ptr()`: MLP projection of SAM output token
 - Handle occlusion case (use no_obj_ptr)
 - **Verify:** Compare object pointers
 
 **Step 7.4: Tracker infrastructure**
+
 - Implement `sam3_create_tracker()`
 - Implement memory bank (sliding window of 7)
 - Implement object pointer bank (up to 16)
 - Implement `sam3_select_memory_frames()`
 
 **Step 7.5: Single-frame propagation**
+
 - Implement `sam3_propagate_single()`: memory attention → SAM mask decoder
 - **Verify:** Compare propagated mask for frame N+1 given frame N's memory
 
 **Step 7.6: Detection + matching**
+
 - Implement `sam3_detect_frame()` (reuse PCS pipeline)
 - Implement `sam3_match_detections()` (IoU-based matching)
 - Implement `sam3_update_tracker()`
 
 **Step 7.7: Disambiguation strategies**
+
 - Implement hotstart delay (confirmation window)
 - Implement duplicate removal
 - Implement masklet suppression (MDS < 0)
@@ -2659,11 +2710,13 @@ This section defines the exact order in which to implement, from zero to a worki
 - **Verify:** Compare tracker output for a 30-frame test video
 
 **Step 7.8: Post-processing**
+
 - Implement non-overlapping constraints
 - Implement hole filling (connected components)
 - Implement `sam3_fill_holes()` and `sam3_remove_sprinkles()`
 
 **Step 7.9: Wire up `sam3_track_frame()`**
+
 - Full per-frame pipeline: detect → propagate → match → update → memory
 - Implement `sam3_refine_instance()`
 - **Milestone:** Can track objects through video!
@@ -2671,16 +2724,19 @@ This section defines the exact order in which to implement, from zero to a worki
 ### Phase 8: Interactive Examples
 
 **Step 8.1: Image example**
+
 - Set up SDL2 + ImGui in `examples/third-party/`
 - Implement `main_image.cpp`: image loading, text prompt, mask rendering
 - Test with real images
 
 **Step 8.2: Video example**
+
 - Implement video frame decoding via ffmpeg pipe
 - Implement `main_video.cpp`: video playback, tracking, mask overlay
 - Test with real videos
 
 **Step 8.3: Performance optimization**
+
 - Profile with Instruments on macOS
 - Ensure Metal backend is used for all heavy operations
 - Optimize memory allocation (reuse graph allocators)
@@ -2689,18 +2745,136 @@ This section defines the exact order in which to implement, from zero to a worki
 ### Phase 9: Polish
 
 **Step 9.1: End-to-end testing**
+
 - Run full test suite (all per-module tests + end-to-end)
 - Fix any numerical discrepancies
 - Test edge cases: empty prompts, very large images, long videos
 
 **Step 9.2: Memory optimization**
+
 - Implement f16 inference for reduced memory
 - Quantization support (q4_0, q8_0) for backbone if ggml supports it
 - Memory mapping for model loading
 
 **Step 9.3: Documentation**
+
 - README with build instructions, usage examples
 - Inline code comments for non-obvious operations
+
+### Phase 10: Visual-Only Model (No Text Encoder)
+
+The full SAM 3 model includes a text encoder (~150M+ params) and detector-only components (fusion encoder, DETR decoder, segmentation head, geometry encoder, DotProductScoring, detector neck) that together account for ~350-400M of the ~850M total parameters. For applications that only need visual prompting (points, boxes, clicks), these are dead weight. This phase adds support for exporting and loading a stripped model that retains only the tracker path, cutting model size nearly in half.
+
+**Step 10.1: Python conversion script — `--visual-only` flag**
+
+- Add `--visual-only` argument to `convert_sam3_to_ggml.py`
+- Append `("visual_only", 0)` to `HPARAMS_FIELDS`; override to `1` when flag is passed
+- Define detector-only tensor prefixes to strip:
+  ```
+  text.*, fenc.*, ddec.*, seg.*, geom.*, scoring.*, neck.det.*
+  ```
+- In the rename loop, skip any tensor whose renamed key starts with a stripped prefix
+- Add validation that all required tracker-path prefixes are present in the output:
+  ```
+  vit.*, neck.trk.*, sam_pe.*, sam_dec.*, mem_enc.*, mem_attn.*, obj_ptr_proj.*
+  ```
+- Print summary of stripped vs. kept tensor counts and file size savings
+- **Verify:** `python convert_sam3_to_ggml.py --model sam3.pt --output sam3-visual.ggml --ftype 1 --visual-only` produces ~700 tensors (vs ~1465), ~0.9 GB at f16 (vs ~1.6 GB)
+
+**Step 10.2: Binary format — `visual_only` hparam**
+
+- Add `int32_t visual_only = 0` field to `sam3_hparams` (after `n_amb_experts`)
+- Read the field in `sam3_load_hparams()`, print in `sam3_print_hparams()`
+- The Python script already writes it as the last hparam (from Step 10.1)
+- **Verify:** Load both full (`visual_only=0`) and visual-only (`visual_only=1`) files, print hparams
+
+**Step 10.3: Conditional tensor registration**
+
+- In `sam3_register_tensors()`, wrap all detector-only registration blocks in `if (!hp.visual_only)`:
+  - Text encoder (`text.*`)
+  - Fusion encoder (`fenc.*`)
+  - DETR decoder (`ddec.*`)
+  - Segmentation head (`seg.*`)
+  - Geometry encoder (`geom.*`)
+  - DotProductScoring (`scoring.*`)
+  - Detector neck (`neck.det.*`)
+- Always register regardless of `visual_only`:
+  - ViT backbone (`vit.*`)
+  - Tracker neck (`neck.trk.*`)
+  - SAM prompt encoder (`sam_pe.*`)
+  - SAM mask decoder (`sam_dec.*`)
+  - Memory encoder (`mem_enc.*`)
+  - Memory attention (`mem_attn.*`)
+  - Object pointer projections (`obj_ptr_proj.*`, `no_obj_ptr`, etc.)
+- Skip BPE tokenizer loading when `visual_only` (tokenizer is only needed for PCS)
+- In `sam3_encode_image()`, skip detector neck computation when `visual_only`
+- **Verify:** Load visual-only model, print registered tensor count (~700); confirm GPU buffer size ~0.9 GB at f16
+
+**Step 10.4: Public API — query and validation**
+
+- Add to `sam3.h`:
+  ```cpp
+  // Returns true if the model was loaded as visual-only (no text/detector path).
+  bool sam3_is_visual_only(const sam3_model & model);
+  ```
+- Guard `sam3_segment_pcs()`: when `visual_only`, print error via `fprintf(stderr)` and return empty `sam3_result{}`
+- `sam3_segment_pvs()` requires no changes — it already uses only the tracker path (SAM prompt encoder + SAM mask decoder)
+- **Verify:** `sam3_is_visual_only()` returns correct value for both model types; `sam3_segment_pcs()` on visual-only model prints error and returns `{}`
+
+**Step 10.5: Visual-only video tracking API**
+
+The current video tracking API (`sam3_track_frame()`) depends on text-prompted detection (PCS) to discover new instances. For visual-only models, instances must be initialized manually via points/boxes.
+
+Add to `sam3.h`:
+
+```cpp
+struct sam3_visual_track_params {
+    float assoc_iou_threshold = 0.1f;
+    int   max_keep_alive      = 30;
+    int   recondition_every   = 16;
+    int   fill_hole_area      = 16;
+};
+
+// Create a tracker for visual-only models. Instances are added manually.
+sam3_tracker_ptr sam3_create_visual_tracker(
+    const sam3_model               & model,
+    const sam3_visual_track_params & params);
+
+// Add an instance to track, initialized from point/box prompts on the current frame.
+// Runs SAM prompt encode + mask decode, inserts result into memory bank.
+// Returns the assigned instance_id, or -1 on failure.
+int sam3_tracker_add_instance(
+    sam3_tracker          & tracker,
+    sam3_state            & state,
+    const sam3_model      & model,
+    const sam3_pvs_params & prompt);
+
+// Propagate all tracked instances to the next frame (no detection step).
+// Runs: image encode → memory attention → SAM mask decode → update memory bank.
+sam3_result sam3_propagate_frame(
+    sam3_tracker     & tracker,
+    sam3_state       & state,
+    const sam3_model & model,
+    const sam3_image & frame);
+```
+
+Implementation notes:
+- `sam3_create_visual_tracker()` creates a tracker that never runs PCS detection
+- `sam3_tracker_add_instance()` reuses the `sam3_segment_pvs()` code path internally, then writes the mask + object pointer to the memory bank
+- `sam3_propagate_frame()` is the propagation loop from Phase 7 (memory attention → SAM mask decode → memory update) without the detection + matching steps
+- The existing `sam3_refine_instance()` already works with visual prompts and needs no changes
+- Guard `sam3_track_frame()`: when `visual_only`, print error and return empty result
+- **Verify:** Create visual tracker, add 2 instances via box prompts on frame 0, propagate through 30 frames; verify `sam3_refine_instance()` works on visual-only tracker
+
+**Step 10.6: Test**
+
+- New file `tests/test_visual_only.cpp`:
+  1. Load visual-only `.ggml` file, verify `sam3_is_visual_only()` returns true
+  2. Call `sam3_segment_pcs()` — verify it returns empty result (no crash)
+  3. Call `sam3_segment_pvs()` with point/box prompts — verify it produces masks
+  4. Create visual tracker, add instance, propagate one frame — verify it produces masks
+- Add `test_visual_only` target to `tests/CMakeLists.txt`
+- **Verify:** All tests pass with a visual-only model file
 
 ---
 
@@ -2708,67 +2882,67 @@ This section defines the exact order in which to implement, from zero to a worki
 
 ### Image Path
 
-| Stage | Tensor | Shape |
-|---|---|---|
-| Input | Preprocessed image | `[1, 3, 1008, 1008]` |
-| Patch embed | After conv | `[1, 1024, 72, 72]` |
-| ViT | After permute + pos_embed | `[1, 72, 72, 1024]` |
-| ViT window | Partitioned (local attn) | `[9, 24, 24, 1024]` |
-| ViT window | Q, K, V per head | `[9, 16, 576, 64]` |
-| ViT global | Full attention | `[1, 16, 5184, 64]` |
-| ViT | Output (after final permute) | `[1, 1024, 72, 72]` |
-| Neck 4× | FPN level 0 | `[1, 256, 288, 288]` |
-| Neck 2× | FPN level 1 | `[1, 256, 144, 144]` |
-| Neck 1× | FPN level 2 | `[1, 256, 72, 72]` |
-| Text | Token IDs | `[1, 32]` |
-| Text | After embedding | `[32, 1, 1024]` |
-| Text | After encoder | `[32, 1, 1024]` |
-| Text | After resizer | `[32, 1, 256]` |
-| Fusion enc | Image features (flat) | `[5184, 1, 256]` |
-| Fusion enc | Prompt tokens | `[L, 1, 256]` |
-| DETR dec | Query embed | `[200, 512]` |
-| DETR dec | Object queries | `[201, 1, 256]` (incl. presence token) |
-| DETR dec | Reference boxes | `[1, 200, 4]` |
-| DETR dec | Class scores | `[1, 200]` |
-| DETR dec | Predicted boxes | `[1, 200, 4]` |
-| Seg head | Pixel features (upsampled) | `[1, 256, 288, 288]` |
-| Seg head | Instance masks | `[1, N, 288, 288]` |
+| Stage       | Tensor                       | Shape                                  |
+| ----------- | ---------------------------- | -------------------------------------- |
+| Input       | Preprocessed image           | `[1, 3, 1008, 1008]`                   |
+| Patch embed | After conv                   | `[1, 1024, 72, 72]`                    |
+| ViT         | After permute + pos_embed    | `[1, 72, 72, 1024]`                    |
+| ViT window  | Partitioned (local attn)     | `[9, 24, 24, 1024]`                    |
+| ViT window  | Q, K, V per head             | `[9, 16, 576, 64]`                     |
+| ViT global  | Full attention               | `[1, 16, 5184, 64]`                    |
+| ViT         | Output (after final permute) | `[1, 1024, 72, 72]`                    |
+| Neck 4×     | FPN level 0                  | `[1, 256, 288, 288]`                   |
+| Neck 2×     | FPN level 1                  | `[1, 256, 144, 144]`                   |
+| Neck 1×     | FPN level 2                  | `[1, 256, 72, 72]`                     |
+| Text        | Token IDs                    | `[1, 32]`                              |
+| Text        | After embedding              | `[32, 1, 1024]`                        |
+| Text        | After encoder                | `[32, 1, 1024]`                        |
+| Text        | After resizer                | `[32, 1, 256]`                         |
+| Fusion enc  | Image features (flat)        | `[5184, 1, 256]`                       |
+| Fusion enc  | Prompt tokens                | `[L, 1, 256]`                          |
+| DETR dec    | Query embed                  | `[200, 512]`                           |
+| DETR dec    | Object queries               | `[201, 1, 256]` (incl. presence token) |
+| DETR dec    | Reference boxes              | `[1, 200, 4]`                          |
+| DETR dec    | Class scores                 | `[1, 200]`                             |
+| DETR dec    | Predicted boxes              | `[1, 200, 4]`                          |
+| Seg head    | Pixel features (upsampled)   | `[1, 256, 288, 288]`                   |
+| Seg head    | Instance masks               | `[1, N, 288, 288]`                     |
 
 ### Tracker Path
 
-| Stage | Tensor | Shape |
-|---|---|---|
-| SAM PE | Sparse embeddings | `[1, N_pts, 256]` |
-| SAM PE | Dense embeddings | `[1, 256, 72, 72]` |
-| SAM dec | Tokens (initial) | `[1, 6+N_pts, 256]` |
-| SAM dec | Source (flat) | `[1, 5184, 256]` |
-| SAM dec | Up1 (after deconv) | `[1, 64, 144, 144]` |
-| SAM dec | Up2 (after deconv) | `[1, 32, 288, 288]` |
-| SAM dec | Masks (low-res) | `[1, 4, 288, 288]` |
-| SAM dec | IoU prediction | `[1, 4]` |
-| SAM dec | Object score | `[1, 1]` |
-| Mem enc | Mask downsampled | `[1, 256, 72, 72]` |
-| Mem enc | Fused features | `[1, 256, 72, 72]` |
-| Mem enc | Memory features | `[1, 64, 72, 72]` |
-| Mem enc | Temporal pos enc | `[7, 1, 1, 64]` |
-| Mem attn | Current features | `[5184, 1, 256]` |
-| Mem attn | Spatial memory (per frame) | `[5184, 1, 64]` |
-| Mem attn | Object pointer (per obj) | `[4, 1, 64]` |
-| Mem attn | Conditioned output | `[5184, 1, 256]` → `[1, 256, 72, 72]` |
-| Obj ptr | Extracted pointer | `[1, 256]` |
-| Obj ptr | Split for cross-attn | `[4, 1, 64]` |
+| Stage    | Tensor                     | Shape                                 |
+| -------- | -------------------------- | ------------------------------------- |
+| SAM PE   | Sparse embeddings          | `[1, N_pts, 256]`                     |
+| SAM PE   | Dense embeddings           | `[1, 256, 72, 72]`                    |
+| SAM dec  | Tokens (initial)           | `[1, 6+N_pts, 256]`                   |
+| SAM dec  | Source (flat)              | `[1, 5184, 256]`                      |
+| SAM dec  | Up1 (after deconv)         | `[1, 64, 144, 144]`                   |
+| SAM dec  | Up2 (after deconv)         | `[1, 32, 288, 288]`                   |
+| SAM dec  | Masks (low-res)            | `[1, 4, 288, 288]`                    |
+| SAM dec  | IoU prediction             | `[1, 4]`                              |
+| SAM dec  | Object score               | `[1, 1]`                              |
+| Mem enc  | Mask downsampled           | `[1, 256, 72, 72]`                    |
+| Mem enc  | Fused features             | `[1, 256, 72, 72]`                    |
+| Mem enc  | Memory features            | `[1, 64, 72, 72]`                     |
+| Mem enc  | Temporal pos enc           | `[7, 1, 1, 64]`                       |
+| Mem attn | Current features           | `[5184, 1, 256]`                      |
+| Mem attn | Spatial memory (per frame) | `[5184, 1, 64]`                       |
+| Mem attn | Object pointer (per obj)   | `[4, 1, 64]`                          |
+| Mem attn | Conditioned output         | `[5184, 1, 256]` → `[1, 256, 72, 72]` |
+| Obj ptr  | Extracted pointer          | `[1, 256]`                            |
+| Obj ptr  | Split for cross-attn       | `[4, 1, 64]`                          |
 
 ---
 
 ## 16. Appendix: Activation Functions Reference
 
-| Activation | Formula | Where used |
-|---|---|---|
-| GELU | `x × Φ(x)` where Φ is the standard normal CDF | ViT MLP, Neck deconv, Text MLP, SAM decoder upscale, Memory encoder (CXBlock, MaskDownSampler) |
-| ReLU | `max(0, x)` | Fusion encoder FFN, DETR decoder FFN, Geometry encoder FFN, SAM TwoWayAttentionBlock MLP, DotProductScoring MLP |
-| Sigmoid | `1 / (1 + exp(-x))` | Box prediction, mask prediction, object score, presence score, IoU prediction |
-| Softmax | `exp(x_i) / Σ exp(x_j)` | All attention layers |
-| LayerScale | `x × γ` (learned scalar) | ViT blocks (if init_values set), Text encoder blocks |
+| Activation | Formula                                       | Where used                                                                                                      |
+| ---------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| GELU       | `x × Φ(x)` where Φ is the standard normal CDF | ViT MLP, Neck deconv, Text MLP, SAM decoder upscale, Memory encoder (CXBlock, MaskDownSampler)                  |
+| ReLU       | `max(0, x)`                                   | Fusion encoder FFN, DETR decoder FFN, Geometry encoder FFN, SAM TwoWayAttentionBlock MLP, DotProductScoring MLP |
+| Sigmoid    | `1 / (1 + exp(-x))`                           | Box prediction, mask prediction, object score, presence score, IoU prediction                                   |
+| Softmax    | `exp(x_i) / Σ exp(x_j)`                       | All attention layers                                                                                            |
+| LayerScale | `x × γ` (learned scalar)                      | ViT blocks (if init_values set), Text encoder blocks                                                            |
 
 ---
 
@@ -2778,14 +2952,16 @@ This plan describes the complete port of SAM 3 (~850M params) to C++ using ggml.
 
 - **~50 internal structs** holding model weights and state
 - **~80 functions** for the forward pass, graph construction, and post-processing
-- **16 public API functions** in the header
-- **1 Python conversion script** for weight conversion
+- **20 public API functions** in the header (including visual-only tracker API)
+- **1 Python conversion script** for weight conversion (with `--visual-only` mode)
 - **10+ test scripts** for layer-by-layer numerical verification
 - **2 interactive example executables** (image + video)
+- **Visual-only model variant** (~45% smaller, no text encoder) for point/box-only applications
 
 The total C++ implementation is estimated at **8,000-12,000 lines** in `sam3.cpp`, with the header at **~200 lines**.
 
 Key technical challenges:
+
 1. **2D Axial RoPE** in ggml — requires custom implementation or use of ggml_rope_ext
 2. **Window attention** — ggml_win_part/ggml_win_unpart or manual view/permute
 3. **Memory bank management** — non-trivial state management across frames
@@ -2793,3 +2969,39 @@ Key technical challenges:
 5. **BPE tokenizer** — must exactly match CLIP's tokenizer for correctness
 6. **Box-relative positional bias** — DETR-specific positional encoding in decoder cross-attention
 7. **Connected components** — needed for hole filling, must implement in pure C++
+8. **Visual-only model** — conditional tensor registration, dual API surface for full vs. stripped models
+
+---
+
+## 17. Appendix: Visual-Only Model Tensor Prefixes
+
+Tensors **kept** in the visual-only model:
+
+| Prefix | Component |
+| ------ | --------- |
+| `vit.*` | ViT backbone (shared) |
+| `neck.trk.*` | Tracker SimpleFPN neck |
+| `sam_pe.*` | SAM prompt encoder |
+| `sam_dec.*` | SAM mask decoder |
+| `mem_enc.*` | Memory encoder |
+| `mem_attn.*` | Memory attention |
+| `obj_ptr_proj.*` | Object pointer MLP |
+| `obj_ptr_tpos_proj.*` | Temporal position projection |
+| `no_obj_ptr` | No-object pointer embedding |
+| `no_mem_embed` | No-memory embedding |
+| `no_mem_pos_enc` | No-memory positional encoding |
+| `no_obj_embed_spatial` | No-object spatial embedding |
+| `trk_mask_ds.*` | Tracker mask downsampling |
+| `mem_enc.tpos_enc` | Temporal position encodings |
+
+Tensors **stripped** (detector-only):
+
+| Prefix | Component | Approx. params |
+| ------ | --------- | -------------- |
+| `text.*` | Text encoder (24 layers, 49408-token embedding) | ~150M |
+| `fenc.*` | Fusion encoder (6 layers) | ~40M |
+| `ddec.*` | DETR decoder (6 layers, queries, bbox heads) | ~50M |
+| `seg.*` | Segmentation head (pixel decoder, mask predictor) | ~30M |
+| `geom.*` | Geometry/exemplar encoder (3 layers) | ~15M |
+| `scoring.*` | DotProductScoring MLP | ~5M |
+| `neck.det.*` | Detector SimpleFPN neck | ~20M |
