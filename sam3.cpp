@@ -1,9 +1,9 @@
 #include "sam3.h"
 
+#include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
-#include "ggml.h"
 
 #ifdef GGML_USE_METAL
 #include "ggml-metal.h"
@@ -12,10 +12,12 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
 #include <algorithm>
 #include <cassert>
-#include <cmath>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -24,8 +26,6 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-
-#include "stb_image_write.h"
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Constants
@@ -549,6 +549,8 @@ struct sam3_state {
     float point_emb_cache[4][256] = {};
     float not_a_point_cache[256] = {};
     float no_mask_emb_cache[256] = {};
+    std::vector<float> dense_pe_cache;       // [D * H * H] — positional encoding grid
+    std::vector<float> dense_nomask_cache;   // [D * H * H] — no-mask embedding tiled
 };
 
 // ── Video tracker state ──────────────────────────────────────────────────────
@@ -586,6 +588,10 @@ struct sam3_tracker {
 
     struct ggml_context* ctx = nullptr;
     ggml_backend_buffer_t buffer = nullptr;
+
+    // Per-tensor backend buffers allocated by sam3_encode_memory / sam3_store_obj_ptr.
+    // Tracked here so they can be freed on tracker reset.
+    std::vector<ggml_backend_buffer_t> owned_buffers;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2711,6 +2717,7 @@ static struct ggml_tensor* sam3_build_text_encoder_graph(struct ggml_context* ct
 bool sam3_encode_image(sam3_state& state,
                        const sam3_model& model,
                        const sam3_image& image) {
+    auto t_start = std::chrono::high_resolution_clock::now();
     const auto& hp = model.hparams;
     const int img_size = hp.img_size;
 
@@ -2800,8 +2807,14 @@ bool sam3_encode_image(sam3_state& state,
     ggml_backend_tensor_set(inp, img_data.data(), 0, img_data.size() * sizeof(float));
 
     // Compute
-    sam3_graph_compute(model.backend, graph, 4);
-    fprintf(stderr, "%s: graph computed\n", __func__);
+    {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        sam3_graph_compute(model.backend, graph, state.n_threads);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        fprintf(stderr, "%s: graph computed in %.1f ms (%d threads)\n",
+                __func__, ms, state.n_threads);
+    }
 
     // ── Cache results in state ────────────────────────────────────────────
     // TODO: copy output tensors to state for later use by PCS/PVS/tracker
@@ -2885,7 +2898,12 @@ bool sam3_encode_image(sam3_state& state,
         }
     }
 
-    fprintf(stderr, "%s: image encoded successfully\n", __func__);
+    // Invalidate PE cache so it's re-populated on next PVS call if needed
+    state.pe_cache_valid = false;
+
+    auto t_end = std::chrono::high_resolution_clock::now();
+    double total_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+    fprintf(stderr, "%s: image encoded successfully in %.1f ms\n", __func__, total_ms);
     return true;
 }
 
@@ -3946,6 +3964,347 @@ static struct ggml_tensor* sam3_build_seg_head_graph(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  Memory encoder (Phase 7, Step 7.1)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// CXBlock: depthwise conv + LayerNorm + pointwise MLP with residual scaling.
+static struct ggml_tensor* sam3_cxblock_forward(
+    struct ggml_context* ctx,
+    struct ggml_tensor*  x,        // [D, H, W, B]
+    struct ggml_tensor*  dw_w,     // [7, 7, 1, D] depthwise
+    struct ggml_tensor*  dw_b,     // [D]
+    struct ggml_tensor*  norm_w,   // [D]
+    struct ggml_tensor*  norm_b,   // [D]
+    struct ggml_tensor*  fc1_w,    // [D, 1024]
+    struct ggml_tensor*  fc1_b,    // [1024]
+    struct ggml_tensor*  fc2_w,    // [1024, D]
+    struct ggml_tensor*  fc2_b,    // [D]
+    struct ggml_tensor*  gamma)    // [D]
+{
+    const int D = (int)x->ne[0];
+    const int H = (int)x->ne[1];
+    const int W = (int)x->ne[2];
+
+    // Depthwise conv (groups = D): pad=3 for 7x7 kernel
+    auto* h = ggml_conv_2d(ctx, dw_w, x, 1, 1, 3, 3, D, 1);
+    h = ggml_add(ctx, h, ggml_reshape_4d(ctx, dw_b, 1, 1, D, 1));
+
+    // LayerNorm2d
+    h = sam3_layer_norm_2d(ctx, h, norm_w, norm_b);
+
+    // Pointwise MLP: reshape to [D, H*W, B], apply FC, reshape back
+    auto* flat = ggml_reshape_3d(ctx, h, D, H * W, 1);
+    flat = ggml_add(ctx, ggml_mul_mat(ctx, fc1_w, flat), fc1_b);
+    flat = ggml_gelu(ctx, flat);
+    flat = ggml_add(ctx, ggml_mul_mat(ctx, fc2_w, flat), fc2_b);
+    h = ggml_reshape_4d(ctx, flat, D, H, W, 1);
+
+    // Residual with learnable scaling: x + gamma * h
+    auto* gamma_4d = ggml_reshape_4d(ctx, gamma, D, 1, 1, 1);
+    h = ggml_mul(ctx, h, gamma_4d);
+    return ggml_add(ctx, x, h);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Memory attention (Phase 7, Step 7.2)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Build memory attention graph.
+// curr_tokens: [D, N, 1] — current frame image tokens (flattened from 72x72 = 5184)
+// mem_feats: [MD, M, 1] — concatenated memory features from all memory slots
+// obj_ptrs: [D, P, 1] — object pointer tokens (appended to KV) or nullptr
+// Returns: conditioned tokens [D, N, 1]
+static struct ggml_tensor* sam3_build_mem_attn_graph(
+    struct ggml_context* ctx,
+    const sam3_model&    model,
+    struct ggml_tensor*  curr_tokens,   // [D, N, 1]
+    struct ggml_tensor*  mem_feats,     // [MD, M, 1]
+    struct ggml_tensor*  obj_ptrs)      // [D, P, 1] or nullptr
+{
+    const auto& ma = model.mem_attn;
+    const int D = model.hparams.neck_dim;  // 256
+    const int N = (int)curr_tokens->ne[1];
+
+    auto* x = curr_tokens;  // [D, N, 1]
+
+    for (int l = 0; l < (int)ma.layers.size(); ++l) {
+        const auto& ly = ma.layers[l];
+
+        // ── Self-attention with RoPE ──────────────────────────────────────
+        {
+            auto* x_norm = sam3_layer_norm(ctx, x, ly.norm1_w, ly.norm1_b);
+            auto* q = ggml_add(ctx, ggml_mul_mat(ctx, ly.sa_q_w, x_norm), ly.sa_q_b);
+            auto* k = ggml_add(ctx, ggml_mul_mat(ctx, ly.sa_k_w, x_norm), ly.sa_k_b);
+            auto* v = ggml_add(ctx, ggml_mul_mat(ctx, ly.sa_v_w, x_norm), ly.sa_v_b);
+
+            // Single-head attention (256-dim)
+            q = ggml_reshape_4d(ctx, q, D, 1, N, 1);
+            k = ggml_reshape_4d(ctx, k, D, 1, N, 1);
+            v = ggml_reshape_4d(ctx, v, D, 1, N, 1);
+            q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));
+            k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));
+            v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
+
+            float scale = 1.0f / sqrtf((float)D);
+            auto* sa_out = ggml_flash_attn_ext(ctx, q, k, v, nullptr, scale, 0.0f, 0.0f);
+            sa_out = ggml_reshape_3d(ctx, sa_out, D, N, 1);
+            sa_out = ggml_add(ctx, ggml_mul_mat(ctx, ly.sa_out_w, sa_out), ly.sa_out_b);
+            x = ggml_add(ctx, x, sa_out);
+        }
+
+        // ── Cross-attention to memory (kv_dim=64) ────────────────────────
+        {
+            auto* x_norm = sam3_layer_norm(ctx, x, ly.norm2_w, ly.norm2_b);
+            auto* q = ggml_add(ctx, ggml_mul_mat(ctx, ly.ca_q_w, x_norm), ly.ca_q_b);
+
+            // KV from memory: project from 64-dim to 256-dim
+            auto* k = ggml_add(ctx, ggml_mul_mat(ctx, ly.ca_k_w, mem_feats), ly.ca_k_b);
+            auto* v = ggml_add(ctx, ggml_mul_mat(ctx, ly.ca_v_w, mem_feats), ly.ca_v_b);
+
+            // Concatenate object pointers directly to KV (already D-dim)
+            if (obj_ptrs) {
+                auto* obj_ptrs_2d = ggml_reshape_2d(ctx, obj_ptrs, D, (int)obj_ptrs->ne[1]);
+                k = ggml_concat(ctx, k, obj_ptrs_2d, 1);
+                v = ggml_concat(ctx, v, obj_ptrs_2d, 1);
+            }
+
+            int M_total = (int)k->ne[1];
+
+            q = ggml_reshape_4d(ctx, q, D, 1, N, 1);
+            k = ggml_reshape_4d(ctx, k, D, 1, M_total, 1);
+            v = ggml_reshape_4d(ctx, v, D, 1, M_total, 1);
+            q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));
+            k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));
+            v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
+
+            float scale = 1.0f / sqrtf((float)D);
+            auto* ca_out = ggml_flash_attn_ext(ctx, q, k, v, nullptr, scale, 0.0f, 0.0f);
+            ca_out = ggml_reshape_3d(ctx, ca_out, D, N, 1);
+            ca_out = ggml_add(ctx, ggml_mul_mat(ctx, ly.ca_out_w, ca_out), ly.ca_out_b);
+            x = ggml_add(ctx, x, ca_out);
+        }
+
+        // ── FFN ───────────────────────────────────────────────────────────
+        {
+            auto* x_norm = sam3_layer_norm(ctx, x, ly.norm3_w, ly.norm3_b);
+            auto* ffn = ggml_add(ctx, ggml_mul_mat(ctx, ly.ffn_fc1_w, x_norm), ly.ffn_fc1_b);
+            ffn = ggml_relu(ctx, ffn);
+            ffn = ggml_add(ctx, ggml_mul_mat(ctx, ly.ffn_fc2_w, ffn), ly.ffn_fc2_b);
+            x = ggml_add(ctx, x, ffn);
+        }
+    }
+
+    // Final norm
+    auto* norm_w = model.tensors.at("mem_attn.norm.weight");
+    auto* norm_b = model.tensors.at("mem_attn.norm.bias");
+    x = sam3_layer_norm(ctx, x, norm_w, norm_b);
+
+    return x;  // [D, N, 1]
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Object pointer extraction (Phase 7, Step 7.3)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Extract object pointer from SAM output token via 3-layer MLP (CPU-side).
+static void sam3_extract_obj_ptr_cpu(
+    const sam3_model& model,
+    const float*      sam_token_data,  // [D]
+    float             obj_score,
+    float*            out_ptr)         // [D]
+{
+    const int D = model.hparams.neck_dim;
+    const float occlusion_threshold = 0.0f;
+
+    if (obj_score < occlusion_threshold) {
+        ggml_backend_tensor_get(model.no_obj_ptr, out_ptr, 0, D * sizeof(float));
+        return;
+    }
+
+    std::vector<float> h(D), tmp(D);
+    std::copy(sam_token_data, sam_token_data + D, h.data());
+
+    for (int j = 0; j < 3; ++j) {
+        auto* w = model.obj_ptr_proj_w[j];
+        auto* b = model.obj_ptr_proj_b[j];
+
+        int nel_w = (int)(w->ne[0] * w->ne[1]);
+        std::vector<float> w_data(nel_w);
+        if (w->type == GGML_TYPE_F16) {
+            std::vector<ggml_fp16_t> w16(nel_w);
+            ggml_backend_tensor_get(w, w16.data(), 0, nel_w * sizeof(ggml_fp16_t));
+            ggml_fp16_to_fp32_row(w16.data(), w_data.data(), nel_w);
+        } else {
+            ggml_backend_tensor_get(w, w_data.data(), 0, nel_w * sizeof(float));
+        }
+
+        std::vector<float> b_data(D);
+        ggml_backend_tensor_get(b, b_data.data(), 0, D * sizeof(float));
+
+        for (int o = 0; o < D; ++o) {
+            float sum = b_data[o];
+            for (int i = 0; i < D; ++i) {
+                sum += w_data[o * D + i] * h[i];
+            }
+            tmp[o] = (j < 2) ? std::max(0.0f, sum) : sum;
+        }
+        std::swap(h, tmp);
+    }
+    std::copy(h.begin(), h.end(), out_ptr);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Tracker infrastructure (Phase 7, Step 7.4)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Select memory frames for propagation (most recent + evenly spaced).
+static std::vector<int> sam3_select_memory_frames(
+    const std::vector<sam3_memory_slot>& bank,
+    int                                   max_slots)
+{
+    if ((int)bank.size() <= max_slots) {
+        std::vector<int> all(bank.size());
+        for (int i = 0; i < (int)bank.size(); ++i) all[i] = i;
+        return all;
+    }
+    std::vector<int> selected;
+    selected.push_back(0);
+    selected.push_back((int)bank.size() - 1);
+    int remaining = max_slots - 2;
+    if (remaining > 0) {
+        float step = (float)(bank.size() - 2) / (remaining + 1);
+        for (int i = 0; i < remaining; ++i) {
+            int idx = 1 + (int)((i + 1) * step);
+            idx = std::min(idx, (int)bank.size() - 2);
+            selected.push_back(idx);
+        }
+    }
+    std::sort(selected.begin(), selected.end());
+    selected.erase(std::unique(selected.begin(), selected.end()), selected.end());
+    return selected;
+}
+
+// Compute mask IoU between two binary masks.
+static float sam3_mask_iou(const uint8_t* a, const uint8_t* b, int n) {
+    int inter = 0, uni = 0;
+    for (int i = 0; i < n; ++i) {
+        bool va = a[i] > 127;
+        bool vb = b[i] > 127;
+        if (va && vb) ++inter;
+        if (va || vb) ++uni;
+    }
+    return (uni > 0) ? (float)inter / uni : 0.0f;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Post-processing: hole filling and sprinkle removal (Phase 7, Step 7.8)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Fill small holes in a binary mask using BFS connected components.
+static void sam3_fill_holes(uint8_t* mask, int w, int h, int area_threshold) {
+    const int n = w * h;
+    std::vector<int> labels(n, -1);
+    int next_label = 0;
+    std::vector<int> component_sizes;
+
+    for (int i = 0; i < n; ++i) {
+        if (mask[i] > 127 || labels[i] >= 0) continue;
+        int label = next_label++;
+        component_sizes.push_back(0);
+        std::vector<int> queue;
+        queue.push_back(i);
+        labels[i] = label;
+        int head = 0;
+        bool touches_border = false;
+        while (head < (int)queue.size()) {
+            int p = queue[head++];
+            component_sizes[label]++;
+            int px = p % w, py = p / w;
+            if (px == 0 || px == w - 1 || py == 0 || py == h - 1) touches_border = true;
+            int dx[] = {-1, 1, 0, 0};
+            int dy[] = {0, 0, -1, 1};
+            for (int d = 0; d < 4; ++d) {
+                int nx2 = px + dx[d], ny2 = py + dy[d];
+                if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+                int ni = ny2 * w + nx2;
+                if (mask[ni] <= 127 && labels[ni] < 0) {
+                    labels[ni] = label;
+                    queue.push_back(ni);
+                }
+            }
+        }
+        if (touches_border) component_sizes[label] = area_threshold + 1;
+    }
+    for (int i = 0; i < n; ++i) {
+        if (mask[i] <= 127 && labels[i] >= 0 && component_sizes[labels[i]] <= area_threshold) {
+            mask[i] = 255;
+        }
+    }
+}
+
+// Remove small foreground sprinkles.
+static void sam3_remove_sprinkles(uint8_t* mask, int w, int h, int area_threshold) {
+    const int n = w * h;
+    std::vector<int> labels(n, -1);
+    int next_label = 0;
+    std::vector<int> component_sizes;
+
+    for (int i = 0; i < n; ++i) {
+        if (mask[i] <= 127 || labels[i] >= 0) continue;
+        int label = next_label++;
+        component_sizes.push_back(0);
+        std::vector<int> queue;
+        queue.push_back(i);
+        labels[i] = label;
+        int head = 0;
+        while (head < (int)queue.size()) {
+            int p = queue[head++];
+            component_sizes[label]++;
+            int px = p % w, py = p / w;
+            int dx[] = {-1, 1, 0, 0};
+            int dy[] = {0, 0, -1, 1};
+            for (int d = 0; d < 4; ++d) {
+                int nx2 = px + dx[d], ny2 = py + dy[d];
+                if (nx2 < 0 || nx2 >= w || ny2 < 0 || ny2 >= h) continue;
+                int ni = ny2 * w + nx2;
+                if (mask[ni] > 127 && labels[ni] < 0) {
+                    labels[ni] = label;
+                    queue.push_back(ni);
+                }
+            }
+        }
+    }
+    for (int i = 0; i < n; ++i) {
+        if (mask[i] > 127 && labels[i] >= 0 && component_sizes[labels[i]] <= area_threshold) {
+            mask[i] = 0;
+        }
+    }
+}
+
+// Resolve overlapping masks: higher-scoring instances take priority.
+static void sam3_resolve_overlaps(std::vector<sam3_detection>& dets) {
+    if (dets.size() <= 1) return;
+    const int w = dets[0].mask.width;
+    const int h = dets[0].mask.height;
+    if (w == 0 || h == 0) return;
+    std::sort(dets.begin(), dets.end(), [](const sam3_detection& a, const sam3_detection& b) {
+        return a.score > b.score;
+    });
+    const int n = w * h;
+    for (int i = 0; i < n; ++i) {
+        bool claimed = false;
+        for (auto& det : dets) {
+            if (det.mask.data.empty()) continue;
+            if (claimed) {
+                det.mask.data[i] = 0;
+            } else if (det.mask.data[i] > 127) {
+                claimed = true;
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  Post-processing: NMS, bilinear interpolation, mask binarization
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -4071,6 +4430,7 @@ static void sam3_sine_pos_embed_boxes(float* out, const float* boxes, int NQ, in
 sam3_result sam3_segment_pcs(sam3_state& state,
                              const sam3_model& model,
                              const sam3_pcs_params& params) {
+    auto t_start = std::chrono::high_resolution_clock::now();
     const auto& hp = model.hparams;
     const int D = hp.neck_dim;           // 256
     const int H = hp.n_img_embd();       // 72
@@ -4281,8 +4641,14 @@ sam3_result sam3_segment_pcs(sam3_state& state,
     }
 
     // ── Compute ──────────────────────────────────────────────────────────
-    sam3_graph_compute(model.backend, graph, 4);
-    fprintf(stderr, "%s: graph computed\n", __func__);
+    {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        sam3_graph_compute(model.backend, graph, state.n_threads);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        fprintf(stderr, "%s: graph computed in %.1f ms (%d threads)\n",
+                __func__, ms, state.n_threads);
+    }
 
     // ── Read outputs ─────────────────────────────────────────────────────
     std::vector<float> scores_data(NQ);
@@ -4360,6 +4726,10 @@ sam3_result sam3_segment_pcs(sam3_state& state,
     ggml_gallocr_free(galloc);
     ggml_free(ctx0);
 
+    auto t_end = std::chrono::high_resolution_clock::now();
+    double total_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+    fprintf(stderr, "%s: completed in %.1f ms\n", __func__, total_ms);
+
     return result;
 }
 
@@ -4430,6 +4800,85 @@ static void sam3_pe_encode_coord(float* out, float x_norm, float y_norm,
         out[i] = sinf(dot);
         out[i + num_pos_feats] = cosf(dot);
     }
+}
+
+// Read SAM prompt encoder weights from GPU and cache them in state.
+// Also pre-computes the dense PE grid and no-mask tiled embedding.
+// These never change between PVS calls for the same model.
+static void sam3_populate_pe_cache(sam3_state & state, const sam3_model & model) {
+    if (state.pe_cache_valid) return;
+
+    const int D = model.hparams.sam_embed_dim;      // 256
+    const int H = model.hparams.n_img_embd();        // 72
+    const int num_pos_feats = D / 2;                  // 128
+    const int pe_nel = 2 * num_pos_feats;             // 256
+    const auto & pe = model.sam_pe;
+
+    // pe_gaussian
+    state.pe_gauss_cache.resize(pe_nel);
+    if (pe.pe_gaussian->type == GGML_TYPE_F16) {
+        std::vector<ggml_fp16_t> tmp(pe_nel);
+        ggml_backend_tensor_get(pe.pe_gaussian, tmp.data(), 0, pe_nel * sizeof(ggml_fp16_t));
+        ggml_fp16_to_fp32_row(tmp.data(), state.pe_gauss_cache.data(), pe_nel);
+    } else {
+        ggml_backend_tensor_get(pe.pe_gaussian, state.pe_gauss_cache.data(), 0, pe_nel * sizeof(float));
+    }
+
+    // point_embed[4]
+    for (int i = 0; i < 4; ++i) {
+        if (pe.point_embed[i]->type == GGML_TYPE_F16) {
+            std::vector<ggml_fp16_t> tmp(D);
+            ggml_backend_tensor_get(pe.point_embed[i], tmp.data(), 0, D * sizeof(ggml_fp16_t));
+            ggml_fp16_to_fp32_row(tmp.data(), state.point_emb_cache[i], D);
+        } else {
+            ggml_backend_tensor_get(pe.point_embed[i], state.point_emb_cache[i], 0, D * sizeof(float));
+        }
+    }
+
+    // not_a_point_embed
+    if (pe.not_a_point_embed->type == GGML_TYPE_F16) {
+        std::vector<ggml_fp16_t> tmp(D);
+        ggml_backend_tensor_get(pe.not_a_point_embed, tmp.data(), 0, D * sizeof(ggml_fp16_t));
+        ggml_fp16_to_fp32_row(tmp.data(), state.not_a_point_cache, D);
+    } else {
+        ggml_backend_tensor_get(pe.not_a_point_embed, state.not_a_point_cache, 0, D * sizeof(float));
+    }
+
+    // no_mask_embed
+    if (pe.no_mask_embed->type == GGML_TYPE_F16) {
+        std::vector<ggml_fp16_t> tmp(D);
+        ggml_backend_tensor_get(pe.no_mask_embed, tmp.data(), 0, D * sizeof(ggml_fp16_t));
+        ggml_fp16_to_fp32_row(tmp.data(), state.no_mask_emb_cache, D);
+    } else {
+        ggml_backend_tensor_get(pe.no_mask_embed, state.no_mask_emb_cache, 0, D * sizeof(float));
+    }
+
+    // Pre-compute dense positional encoding grid [D * H * H]
+    state.dense_pe_cache.resize(D * H * H);
+    for (int row = 0; row < H; ++row) {
+        for (int col = 0; col < H; ++col) {
+            float x_norm = ((float)col + 0.5f) / (float)H;
+            float y_norm = ((float)row + 0.5f) / (float)H;
+            float pe_vec[256];
+            sam3_pe_encode_coord(pe_vec, x_norm, y_norm,
+                                 state.pe_gauss_cache.data(), num_pos_feats);
+            for (int d = 0; d < D; ++d)
+                state.dense_pe_cache[d + col * D + row * D * H] = pe_vec[d];
+        }
+    }
+
+    // Pre-compute tiled no-mask embedding [D * H * H]
+    state.dense_nomask_cache.resize(D * H * H);
+    for (int row = 0; row < H; ++row) {
+        for (int col = 0; col < H; ++col) {
+            for (int d = 0; d < D; ++d)
+                state.dense_nomask_cache[d + col * D + row * D * H] = state.no_mask_emb_cache[d];
+        }
+    }
+
+    state.pe_cache_valid = true;
+    fprintf(stderr, "%s: PE cache populated (%d embeddings, %.1f KB dense grids)\n",
+            __func__, pe_nel, 2.0f * D * H * H * sizeof(float) / 1024.0f);
 }
 
 // Build sparse and dense embeddings from point/box prompts
@@ -4780,6 +5229,7 @@ static sam3_dec_result sam3_build_sam_dec_graph(
 sam3_result sam3_segment_pvs(sam3_state& state,
                              const sam3_model& model,
                              const sam3_pvs_params& params) {
+    auto t_start = std::chrono::high_resolution_clock::now();
     const auto& hp = model.hparams;
     const int D = hp.sam_embed_dim;                      // 256
     const int H = hp.n_img_embd();                       // 72
@@ -4829,12 +5279,14 @@ sam3_result sam3_segment_pvs(sam3_state& state,
     ggml_set_output(dec_out.masks);
     ggml_set_output(dec_out.iou_pred);
     ggml_set_output(dec_out.obj_score);
+    ggml_set_output(dec_out.sam_token);
 
     // ── Build and allocate graph ─────────────────────────────────────────
     struct ggml_cgraph* graph = ggml_new_graph_custom(ctx0, 32768, false);
     ggml_build_forward_expand(graph, dec_out.masks);
     ggml_build_forward_expand(graph, dec_out.iou_pred);
     ggml_build_forward_expand(graph, dec_out.obj_score);
+    ggml_build_forward_expand(graph, dec_out.sam_token);
 
     auto* galloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
     if (!ggml_gallocr_reserve(galloc, graph)) {
@@ -4852,58 +5304,19 @@ sam3_result sam3_segment_pvs(sam3_state& state,
 
     fprintf(stderr, "%s: graph allocated, %d nodes\n", __func__, ggml_graph_n_nodes(graph));
 
-    // ── Upload input data ────────────────────────────────────────────────
-    // Re-compute the CPU data and upload (sam3_build_sam_pe pre-computed it)
+    // ── Upload input data (using cached embeddings) ────────────────────
+    // Populate PE cache on first call (reads model weights from GPU once)
+    sam3_populate_pe_cache(state, model);
+
     {
-        // Sparse embeddings
         const int N_pts = pe_out.n_tokens;
-        const auto& pe = model.sam_pe;
         const int num_pos_feats = D / 2;
-
-        // Read pe_gaussian
-        const int pe_nel = 2 * num_pos_feats;
-        std::vector<float> pe_gauss(pe_nel);
-        if (pe.pe_gaussian->type == GGML_TYPE_F16) {
-            std::vector<ggml_fp16_t> tmp(pe_nel);
-            ggml_backend_tensor_get(pe.pe_gaussian, tmp.data(), 0, pe_nel * sizeof(ggml_fp16_t));
-            ggml_fp16_to_fp32_row(tmp.data(), pe_gauss.data(), pe_nel);
-        } else {
-            ggml_backend_tensor_get(pe.pe_gaussian, pe_gauss.data(), 0, pe_nel * sizeof(float));
-        }
-
-        // Read point embeddings
-        float point_emb[4][256];
-        for (int i = 0; i < 4; ++i) {
-            if (pe.point_embed[i]->type == GGML_TYPE_F16) {
-                std::vector<ggml_fp16_t> tmp(D);
-                ggml_backend_tensor_get(pe.point_embed[i], tmp.data(), 0, D * sizeof(ggml_fp16_t));
-                ggml_fp16_to_fp32_row(tmp.data(), point_emb[i], D);
-            } else {
-                ggml_backend_tensor_get(pe.point_embed[i], point_emb[i], 0, D * sizeof(float));
-            }
-        }
-
-        float not_a_point[256];
-        if (pe.not_a_point_embed->type == GGML_TYPE_F16) {
-            std::vector<ggml_fp16_t> tmp(D);
-            ggml_backend_tensor_get(pe.not_a_point_embed, tmp.data(), 0, D * sizeof(ggml_fp16_t));
-            ggml_fp16_to_fp32_row(tmp.data(), not_a_point, D);
-        } else {
-            ggml_backend_tensor_get(pe.not_a_point_embed, not_a_point, 0, D * sizeof(float));
-        }
-
-        float no_mask_emb[256];
-        if (pe.no_mask_embed->type == GGML_TYPE_F16) {
-            std::vector<ggml_fp16_t> tmp(D);
-            ggml_backend_tensor_get(pe.no_mask_embed, tmp.data(), 0, D * sizeof(ggml_fp16_t));
-            ggml_fp16_to_fp32_row(tmp.data(), no_mask_emb, D);
-        } else {
-            ggml_backend_tensor_get(pe.no_mask_embed, no_mask_emb, 0, D * sizeof(float));
-        }
 
         // Re-build prompts
         std::vector<float> all_coords;
         std::vector<int> all_labels;
+        all_coords.reserve(N_pts * 2);
+        all_labels.reserve(N_pts);
         for (const auto& pt : params.pos_points) {
             all_coords.push_back(pt.x);
             all_coords.push_back(pt.y);
@@ -4928,7 +5341,7 @@ sam3_result sam3_segment_pvs(sam3_state& state,
             all_labels.push_back(3);
         }
 
-        // Sparse embeddings
+        // Sparse embeddings — only this changes per call
         std::vector<float> sparse_data(N_pts * D, 0.0f);
         for (int p = 0; p < N_pts; ++p) {
             float px = all_coords[p * 2 + 0] + 0.5f;
@@ -4936,46 +5349,35 @@ sam3_result sam3_segment_pvs(sam3_state& state,
             float x_norm = px / (float)hp.img_size;
             float y_norm = py / (float)hp.img_size;
             float pe_vec[256];
-            sam3_pe_encode_coord(pe_vec, x_norm, y_norm, pe_gauss.data(), num_pos_feats);
+            sam3_pe_encode_coord(pe_vec, x_norm, y_norm,
+                                 state.pe_gauss_cache.data(), num_pos_feats);
             int label = all_labels[p];
             if (label == -1) {
                 for (int d = 0; d < D; ++d)
-                    sparse_data[p * D + d] = not_a_point[d];
+                    sparse_data[p * D + d] = state.not_a_point_cache[d];
             } else {
                 for (int d = 0; d < D; ++d)
-                    sparse_data[p * D + d] = pe_vec[d] + point_emb[label][d];
+                    sparse_data[p * D + d] = pe_vec[d] + state.point_emb_cache[label][d];
             }
         }
         ggml_backend_tensor_set(pe_out.sparse, sparse_data.data(), 0, N_pts * D * sizeof(float));
 
-        // Dense PE grid
-        std::vector<float> dense_pe_data(D * H * H);
-        for (int row = 0; row < H; ++row) {
-            for (int col = 0; col < H; ++col) {
-                float x_norm = ((float)col + 0.5f) / (float)H;
-                float y_norm = ((float)row + 0.5f) / (float)H;
-                float pe_vec[256];
-                sam3_pe_encode_coord(pe_vec, x_norm, y_norm, pe_gauss.data(), num_pos_feats);
-                for (int d = 0; d < D; ++d)
-                    dense_pe_data[d + col * D + row * D * H] = pe_vec[d];
-            }
-        }
-        ggml_backend_tensor_set(pe_out.image_pe, dense_pe_data.data(), 0, D * H * H * sizeof(float));
-
-        // Dense no-mask embedding
-        std::vector<float> dense_data(D * H * H);
-        for (int row = 0; row < H; ++row) {
-            for (int col = 0; col < H; ++col) {
-                for (int d = 0; d < D; ++d)
-                    dense_data[d + col * D + row * D * H] = no_mask_emb[d];
-            }
-        }
-        ggml_backend_tensor_set(pe_out.dense, dense_data.data(), 0, D * H * H * sizeof(float));
+        // Dense PE grid and no-mask embedding — use pre-computed caches
+        ggml_backend_tensor_set(pe_out.image_pe, state.dense_pe_cache.data(),
+                                0, D * H * H * sizeof(float));
+        ggml_backend_tensor_set(pe_out.dense, state.dense_nomask_cache.data(),
+                                0, D * H * H * sizeof(float));
     }
 
     // ── Compute ──────────────────────────────────────────────────────────
-    sam3_graph_compute(model.backend, graph, 4);
-    fprintf(stderr, "%s: graph computed\n", __func__);
+    {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        sam3_graph_compute(model.backend, graph, state.n_threads);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        fprintf(stderr, "%s: graph computed in %.1f ms (%d threads)\n",
+                __func__, ms, state.n_threads);
+    }
 
     // ── Read outputs ─────────────────────────────────────────────────────
     // masks: [288*288, 4, 1]
@@ -5055,56 +5457,397 @@ sam3_result sam3_segment_pvs(sam3_state& state,
     ggml_gallocr_free(galloc);
     ggml_free(ctx0);
 
+    auto t_end = std::chrono::high_resolution_clock::now();
+    double total_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+    fprintf(stderr, "%s: completed in %.1f ms\n", __func__, total_ms);
+
     return result;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Video tracking
+//  Video tracking (Phase 7)
 // ═══════════════════════════════════════════════════════════════════════════════
+
+struct sam3_prop_output {
+    std::vector<float> mask_logits;
+    std::vector<float> iou_scores;
+    float              obj_score;
+    std::vector<float> sam_token;
+    int n_masks, mask_h, mask_w;
+};
+
+static sam3_prop_output sam3_propagate_single(
+    sam3_state& state, const sam3_model& model,
+    const sam3_masklet& masklet,
+    const std::vector<sam3_memory_slot>& mem_bank,
+    const std::vector<std::pair<int, struct ggml_tensor*>>& ptr_bank)
+{
+    sam3_prop_output output = {};
+    const auto& hp = model.hparams;
+    const int D = hp.neck_dim, MD = hp.mem_out_dim, H = hp.n_img_embd();
+
+    auto sel = sam3_select_memory_frames(mem_bank, hp.num_maskmem);
+    if (sel.empty()) return output;
+
+    int n_sel = (int)sel.size(), M = n_sel * H * H;
+    std::vector<float> mem_data(MD * M);
+    for (int s = 0; s < n_sel; ++s)
+        ggml_backend_tensor_get(mem_bank[sel[s]].spatial_feats,
+                                 mem_data.data() + s * MD * H * H, 0, MD * H * H * sizeof(float));
+
+    int P = std::min((int)ptr_bank.size(), hp.max_obj_ptrs);
+    std::vector<float> ptr_data(D * P);
+    for (int p = 0; p < P; ++p)
+        ggml_backend_tensor_get(ptr_bank[p].second, ptr_data.data() + p * D, 0, D * sizeof(float));
+
+    const size_t buf_size = ggml_tensor_overhead() * 16384 + ggml_graph_overhead() * 2;
+    struct ggml_init_params gparams = {buf_size, nullptr, true};
+    auto* ctx0 = ggml_init(gparams);
+    if (!ctx0) return output;
+
+    auto* curr = ggml_reshape_3d(ctx0, state.neck_trk[2], D, H * H, 1);
+    auto* mem_in = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, MD, M, 1);
+    ggml_set_name(mem_in, "mem_feats"); ggml_set_input(mem_in);
+    struct ggml_tensor* ptr_in = nullptr;
+    if (P > 0) { ptr_in = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, D, P, 1);
+                  ggml_set_name(ptr_in, "obj_ptrs"); ggml_set_input(ptr_in); }
+
+    auto* conditioned = sam3_build_mem_attn_graph(ctx0, model, curr, mem_in, ptr_in);
+    auto* cond_spatial = ggml_reshape_4d(ctx0, conditioned, D, H, H, 1);
+
+    auto* empty_sparse = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, D, 0, 1);
+    ggml_set_name(empty_sparse, "prop_sparse");
+    auto* image_pe = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, D, H, H, 1);
+    ggml_set_name(image_pe, "prop_pe"); ggml_set_input(image_pe);
+    auto* dense_emb = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, D, H, H, 1);
+    ggml_set_name(dense_emb, "prop_dense"); ggml_set_input(dense_emb);
+
+    auto dec = sam3_build_sam_dec_graph(ctx0, model, cond_spatial, image_pe,
+                                         empty_sparse, dense_emb,
+                                         state.neck_trk[0], state.neck_trk[1]);
+    ggml_set_output(dec.masks); ggml_set_output(dec.iou_pred);
+    ggml_set_output(dec.obj_score); ggml_set_output(dec.sam_token);
+
+    auto* graph = ggml_new_graph_custom(ctx0, 32768, false);
+    ggml_build_forward_expand(graph, dec.masks);
+    ggml_build_forward_expand(graph, dec.iou_pred);
+    ggml_build_forward_expand(graph, dec.obj_score);
+    ggml_build_forward_expand(graph, dec.sam_token);
+
+    auto* galloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+    if (!ggml_gallocr_reserve(galloc, graph) || !ggml_gallocr_alloc_graph(galloc, graph)) {
+        ggml_gallocr_free(galloc); ggml_free(ctx0); return output; }
+
+    ggml_backend_tensor_set(mem_in, mem_data.data(), 0, mem_data.size() * sizeof(float));
+    if (ptr_in && P > 0)
+        ggml_backend_tensor_set(ptr_in, ptr_data.data(), 0, ptr_data.size() * sizeof(float));
+
+    // Upload image_pe and dense_emb
+    {
+        const int npf = D / 2;
+        std::vector<float> pe_g(D);
+        if (model.sam_pe.pe_gaussian->type == GGML_TYPE_F16) {
+            std::vector<ggml_fp16_t> tmp(D);
+            ggml_backend_tensor_get(model.sam_pe.pe_gaussian, tmp.data(), 0, D * sizeof(ggml_fp16_t));
+            ggml_fp16_to_fp32_row(tmp.data(), pe_g.data(), D);
+        } else ggml_backend_tensor_get(model.sam_pe.pe_gaussian, pe_g.data(), 0, D * sizeof(float));
+        std::vector<float> pe_d(D * H * H);
+        for (int r = 0; r < H; ++r) for (int c = 0; c < H; ++c) {
+            float xn = ((float)c + 0.5f) / H, yn = ((float)r + 0.5f) / H;
+            float pv[256]; sam3_pe_encode_coord(pv, xn, yn, pe_g.data(), npf);
+            for (int d = 0; d < D; ++d) pe_d[d + c*D + r*D*H] = pv[d];
+        }
+        ggml_backend_tensor_set(image_pe, pe_d.data(), 0, pe_d.size() * sizeof(float));
+
+        float nm[256];
+        if (model.sam_pe.no_mask_embed->type == GGML_TYPE_F16) {
+            std::vector<ggml_fp16_t> tmp(D);
+            ggml_backend_tensor_get(model.sam_pe.no_mask_embed, tmp.data(), 0, D * sizeof(ggml_fp16_t));
+            ggml_fp16_to_fp32_row(tmp.data(), nm, D);
+        } else ggml_backend_tensor_get(model.sam_pe.no_mask_embed, nm, 0, D * sizeof(float));
+        std::vector<float> dd(D * H * H);
+        for (int r = 0; r < H; ++r) for (int c = 0; c < H; ++c)
+            for (int d = 0; d < D; ++d) dd[d + c*D + r*D*H] = nm[d];
+        ggml_backend_tensor_set(dense_emb, dd.data(), 0, dd.size() * sizeof(float));
+    }
+
+    sam3_graph_compute(model.backend, graph, 4);
+
+    const int mhw = 288;
+    output.n_masks = 1; output.mask_h = mhw; output.mask_w = mhw;
+    output.mask_logits.resize(mhw * mhw);
+    ggml_backend_tensor_get(dec.masks, output.mask_logits.data(), 0, mhw*mhw*sizeof(float));
+    output.iou_scores.resize(1);
+    ggml_backend_tensor_get(dec.iou_pred, output.iou_scores.data(), 0, sizeof(float));
+    ggml_backend_tensor_get(dec.obj_score, &output.obj_score, 0, sizeof(float));
+    output.sam_token.resize(D);
+    ggml_backend_tensor_get(dec.sam_token, output.sam_token.data(), 0, D * sizeof(float));
+
+    ggml_gallocr_free(galloc); ggml_free(ctx0);
+    return output;
+}
+
+static std::vector<std::pair<int,int>> sam3_match_detections(
+    const std::vector<sam3_masklet>& masklets, const std::vector<sam3_detection>& dets,
+    const std::vector<sam3_mask>& prop_masks, float iou_threshold) {
+    std::vector<std::pair<int,int>> matches;
+    if (masklets.empty() || dets.empty()) return matches;
+    int n_m = (int)masklets.size(), n_d = (int)dets.size();
+    std::vector<bool> dm(n_d, false);
+    for (int i = 0; i < n_m; ++i) {
+        if (i >= (int)prop_masks.size() || prop_masks[i].data.empty()) continue;
+        int bj = -1; float bi = iou_threshold;
+        for (int j = 0; j < n_d; ++j) {
+            if (dm[j] || dets[j].mask.data.empty()) continue;
+            int w = prop_masks[i].width, h = prop_masks[i].height;
+            if (w != dets[j].mask.width || h != dets[j].mask.height) continue;
+            float iou = sam3_mask_iou(prop_masks[i].data.data(), dets[j].mask.data.data(), w*h);
+            if (iou > bi) { bi = iou; bj = j; }
+        }
+        if (bj >= 0) { matches.push_back({i, bj}); dm[bj] = true; }
+    }
+    return matches;
+}
+
+static void sam3_update_tracker(sam3_tracker& tracker, int frame_idx) {
+    for (auto it = tracker.pending.begin(); it != tracker.pending.end(); ) {
+        int age = frame_idx - it->first_frame;
+        if (age >= tracker.params.hotstart_delay && it->mds_sum > 0) {
+            it->confirmed = true; tracker.masklets.push_back(std::move(*it));
+            it = tracker.pending.erase(it);
+        } else if (age >= tracker.params.hotstart_delay) {
+            it = tracker.pending.erase(it);
+        } else ++it;
+    }
+    for (auto it = tracker.masklets.begin(); it != tracker.masklets.end(); ) {
+        if (frame_idx - it->last_seen > tracker.params.max_keep_alive) {
+            tracker.mem_banks.erase(it->instance_id);
+            tracker.ptr_banks.erase(it->instance_id);
+            it = tracker.masklets.erase(it);
+        } else ++it;
+    }
+}
+
+static bool sam3_encode_memory(
+    sam3_tracker& tracker, sam3_state& state, const sam3_model& model,
+    int inst_id, const float* mask_logits, int mask_h, int mask_w,
+    int frame_idx, bool is_cond) {
+    const auto& hp = model.hparams;
+    const int D = hp.neck_dim, MD = hp.mem_out_dim, H = hp.n_img_embd();
+    const size_t bs = ggml_tensor_overhead() * 4096 + ggml_graph_overhead();
+    struct ggml_init_params gp = {bs, nullptr, true};
+    auto* ctx0 = ggml_init(gp); if (!ctx0) return false;
+
+    auto rm = sam3_bilinear_interpolate(mask_logits, mask_w, mask_h, H, H);
+    for (auto& v : rm) v = 1.0f / (1.0f + expf(-v));
+
+    auto* mi = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, H, H, 1);
+    ggml_set_name(mi, "mem_mask"); ggml_set_input(mi);
+
+    auto* pix = ggml_conv_2d(ctx0, model.mem_enc.pix_proj_w, state.neck_trk[2], 1,1,0,0,1,1);
+    pix = ggml_add(ctx0, pix, ggml_reshape_4d(ctx0, model.mem_enc.pix_proj_b, 1,1,D,1));
+    auto* fused = ggml_mul(ctx0, pix, mi);
+    for (int i = 0; i < 2; ++i)
+        fused = sam3_cxblock_forward(ctx0, fused,
+            model.mem_enc.fuser_dw_w[i], model.mem_enc.fuser_dw_b[i],
+            model.mem_enc.fuser_norm_w[i], model.mem_enc.fuser_norm_b[i],
+            model.mem_enc.fuser_fc1_w[i], model.mem_enc.fuser_fc1_b[i],
+            model.mem_enc.fuser_fc2_w[i], model.mem_enc.fuser_fc2_b[i],
+            model.mem_enc.fuser_gamma[i]);
+    auto* mo = ggml_conv_2d(ctx0, model.mem_enc.out_proj_w, fused, 1,1,0,0,1,1);
+    mo = ggml_add(ctx0, mo, ggml_reshape_4d(ctx0, model.mem_enc.out_proj_b, 1,1,MD,1));
+    ggml_set_name(mo, "mem_out"); ggml_set_output(mo);
+
+    auto* g = ggml_new_graph_custom(ctx0, 8192, false);
+    ggml_build_forward_expand(g, mo);
+    auto* ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+    if (!ggml_gallocr_reserve(ga, g) || !ggml_gallocr_alloc_graph(ga, g)) {
+        ggml_gallocr_free(ga); ggml_free(ctx0); return false; }
+    ggml_backend_tensor_set(mi, rm.data(), 0, rm.size() * sizeof(float));
+    sam3_graph_compute(model.backend, g, 4);
+
+    std::vector<float> md(MD * H * H);
+    ggml_backend_tensor_get(mo, md.data(), 0, md.size() * sizeof(float));
+
+    if (!tracker.ctx) { struct ggml_init_params tp = {ggml_tensor_overhead()*4096,nullptr,true};
+                        tracker.ctx = ggml_init(tp); }
+    auto* st = ggml_new_tensor_4d(tracker.ctx, GGML_TYPE_F32, MD, H, H, 1);
+    auto* sb = ggml_backend_alloc_buffer(model.backend, MD*H*H*sizeof(float));
+    struct ggml_tallocr ta = ggml_tallocr_new(sb);
+    ggml_tallocr_alloc(&ta, st); tracker.owned_buffers.push_back(sb);
+    ggml_backend_tensor_set(st, md.data(), 0, md.size() * sizeof(float));
+
+    sam3_memory_slot slot; slot.spatial_feats = st;
+    slot.frame_index = frame_idx; slot.is_cond_frame = is_cond;
+    auto& bk = tracker.mem_banks[inst_id]; bk.push_back(slot);
+    while ((int)bk.size() > hp.num_maskmem) {
+        bool removed = false;
+        for (auto it = bk.begin(); it != bk.end(); ++it)
+            if (!it->is_cond_frame) { bk.erase(it); removed = true; break; }
+        if (!removed) bk.erase(bk.begin() + 1);
+    }
+    ggml_gallocr_free(ga); ggml_free(ctx0); return true;
+}
+
+static void sam3_store_obj_ptr(
+    sam3_tracker& tracker, const sam3_model& model,
+    int inst_id, const float* pd, int frame_idx) {
+    const int D = model.hparams.neck_dim;
+    if (!tracker.ctx) { struct ggml_init_params tp = {ggml_tensor_overhead()*4096,nullptr,true};
+                        tracker.ctx = ggml_init(tp); }
+    auto* pt = ggml_new_tensor_2d(tracker.ctx, GGML_TYPE_F32, D, 1);
+    auto* pb = ggml_backend_alloc_buffer(model.backend, D * sizeof(float));
+    struct ggml_tallocr ta = ggml_tallocr_new(pb);
+    ggml_tallocr_alloc(&ta, pt); tracker.owned_buffers.push_back(pb);
+    ggml_backend_tensor_set(pt, pd, 0, D * sizeof(float));
+    auto& bk = tracker.ptr_banks[inst_id]; bk.push_back({frame_idx, pt});
+    while ((int)bk.size() > model.hparams.max_obj_ptrs) bk.erase(bk.begin());
+}
 
 sam3_tracker_ptr sam3_create_tracker(const sam3_model& model,
                                      const sam3_video_params& params) {
     sam3_tracker_ptr tracker(new sam3_tracker());
     tracker->params = params;
+    fprintf(stderr, "%s: tracker created (hotstart=%d, max_keep_alive=%d)\n",
+            __func__, params.hotstart_delay, params.max_keep_alive);
     return tracker;
 }
 
-sam3_result sam3_track_frame(sam3_tracker& tracker,
-                             sam3_state& state,
-                             const sam3_model& model,
-                             const sam3_image& frame) {
-    // TODO: encode image → detect → propagate → match → update
-    //       → memory update → post-process
-    //       (Phase 7 of implementation plan)
+sam3_result sam3_track_frame(sam3_tracker& tracker, sam3_state& state,
+                             const sam3_model& model, const sam3_image& frame) {
+    sam3_result result;
+    const int D = model.hparams.neck_dim;
+    if (!sam3_encode_image(state, model, frame)) return result;
+    int fi = tracker.frame_index;
+    fprintf(stderr, "%s: frame %d (%zu active + %zu pending)\n",
+            __func__, fi, tracker.masklets.size(), tracker.pending.size());
 
-    fprintf(stderr, "%s: not yet implemented\n", __func__);
-    return {};
+    std::map<int, sam3_mask> pm; std::map<int, sam3_prop_output> po;
+    for (auto& ml : tracker.masklets) {
+        int id = ml.instance_id;
+        auto im = tracker.mem_banks.find(id);
+        if (im == tracker.mem_banks.end() || im->second.empty()) continue;
+        po[id] = sam3_propagate_single(state, model, ml, im->second, tracker.ptr_banks[id]);
+        if (po[id].mask_logits.empty()) continue;
+        auto rs = sam3_bilinear_interpolate(po[id].mask_logits.data(),
+                    po[id].mask_w, po[id].mask_h, state.orig_width, state.orig_height);
+        pm[id].width = state.orig_width; pm[id].height = state.orig_height;
+        pm[id].data.resize(state.orig_width * state.orig_height);
+        int fg = 0;
+        for (int p = 0; p < (int)rs.size(); ++p) {
+            bool f = rs[p] > 0.0f; pm[id].data[p] = f ? 255 : 0; if (f) fg++;
+        }
+        ml.last_score = po[id].iou_scores[0]; ml.last_seen = fi;
+        float cov = (float)fg / (state.orig_width * state.orig_height);
+        ml.mds_sum += (cov > 0.001f && po[id].obj_score > 0.0f) ? 1 : -1;
+    }
+    for (auto& ml : tracker.pending) {
+        int id = ml.instance_id;
+        auto im = tracker.mem_banks.find(id);
+        if (im == tracker.mem_banks.end() || im->second.empty()) continue;
+        auto p2 = sam3_propagate_single(state, model, ml, im->second, tracker.ptr_banks[id]);
+        if (!p2.mask_logits.empty()) {
+            ml.last_score = p2.iou_scores[0]; ml.last_seen = fi;
+            auto r2 = sam3_bilinear_interpolate(p2.mask_logits.data(),
+                        p2.mask_w, p2.mask_h, state.orig_width, state.orig_height);
+            int fg2 = 0; for (auto v : r2) if (v > 0.0f) fg2++;
+            float c2 = (float)fg2 / (state.orig_width * state.orig_height);
+            ml.mds_sum += (c2 > 0.001f && p2.obj_score > 0.0f) ? 1 : -1;
+            sam3_encode_memory(tracker, state, model, id,
+                                p2.mask_logits.data(), p2.mask_h, p2.mask_w, fi, false);
+            std::vector<float> op(D);
+            sam3_extract_obj_ptr_cpu(model, p2.sam_token.data(), p2.obj_score, op.data());
+            sam3_store_obj_ptr(tracker, model, id, op.data(), fi);
+        }
+    }
+    sam3_result nd;
+    if (!tracker.params.text_prompt.empty()) {
+        sam3_pcs_params pcs; pcs.text_prompt = tracker.params.text_prompt;
+        pcs.score_threshold = tracker.params.score_threshold;
+        pcs.nms_threshold = tracker.params.nms_threshold;
+        nd = sam3_segment_pcs(state, model, pcs);
+    }
+    std::vector<sam3_mask> pmv(tracker.masklets.size());
+    for (int i = 0; i < (int)tracker.masklets.size(); ++i) {
+        auto it = pm.find(tracker.masklets[i].instance_id);
+        if (it != pm.end()) pmv[i] = it->second;
+    }
+    auto mat = sam3_match_detections(tracker.masklets, nd.detections,
+                                      pmv, tracker.params.assoc_iou_threshold);
+    std::vector<bool> dmat(nd.detections.size(), false);
+    for (auto& m : mat) { dmat[m.second] = true; tracker.masklets[m.first].last_seen = fi; }
+    for (int j = 0; j < (int)nd.detections.size(); ++j) {
+        if (dmat[j]) continue;
+        sam3_masklet ml; ml.instance_id = tracker.next_inst_id++;
+        ml.first_frame = fi; ml.last_seen = fi;
+        ml.last_score = nd.detections[j].score; ml.mds_sum = 1;
+        tracker.pending.push_back(std::move(ml));
+    }
+    for (auto& ml : tracker.masklets) {
+        int id = ml.instance_id;
+        auto it = po.find(id);
+        if (it == po.end() || it->second.mask_logits.empty()) continue;
+        sam3_encode_memory(tracker, state, model, id,
+                            it->second.mask_logits.data(), it->second.mask_h, it->second.mask_w, fi, false);
+        std::vector<float> op(D);
+        sam3_extract_obj_ptr_cpu(model, it->second.sam_token.data(), it->second.obj_score, op.data());
+        sam3_store_obj_ptr(tracker, model, id, op.data(), fi);
+    }
+    sam3_update_tracker(tracker, fi);
+    for (auto& ml : tracker.masklets) {
+        auto it = pm.find(ml.instance_id);
+        if (it == pm.end() || it->second.data.empty()) continue;
+        sam3_detection det; det.instance_id = ml.instance_id;
+        det.score = ml.last_score; det.mask = it->second;
+        det.mask.instance_id = ml.instance_id; det.mask.iou_score = ml.last_score;
+        float x0=1e9f,y0=1e9f,x1=-1e9f,y1=-1e9f;
+        for (int p = 0; p < (int)det.mask.data.size(); ++p) if (det.mask.data[p]>127) {
+            int x=p%det.mask.width, y=p/det.mask.width;
+            x0=std::min(x0,(float)x); y0=std::min(y0,(float)y);
+            x1=std::max(x1,(float)x); y1=std::max(y1,(float)y);
+        }
+        if (x0<=x1) det.box={x0,y0,x1,y1};
+        result.detections.push_back(std::move(det));
+    }
+    sam3_resolve_overlaps(result.detections);
+    for (auto& d : result.detections) { if (d.mask.data.empty()) continue;
+        sam3_fill_holes(d.mask.data.data(), d.mask.width, d.mask.height, tracker.params.fill_hole_area);
+        sam3_remove_sprinkles(d.mask.data.data(), d.mask.width, d.mask.height, tracker.params.fill_hole_area);
+    }
+    tracker.frame_index++;
+    fprintf(stderr, "%s: frame %d done — %zu tracked\n", __func__, fi, result.detections.size());
+    return result;
 }
 
-bool sam3_refine_instance(sam3_tracker& tracker,
-                          sam3_state& state,
-                          const sam3_model& model,
-                          int instance_id,
+bool sam3_refine_instance(sam3_tracker& tracker, sam3_state& state,
+                          const sam3_model& model, int instance_id,
                           const std::vector<sam3_point>& pos_points,
                           const std::vector<sam3_point>& neg_points) {
-    // TODO: SAM prompt encode with points → mask decode → update masklet
-    //       (Phase 7 of implementation plan)
-
-    fprintf(stderr, "%s: not yet implemented\n", __func__);
-    return false;
+    const int D = model.hparams.neck_dim;
+    sam3_masklet* tgt = nullptr;
+    for (auto& ml : tracker.masklets) if (ml.instance_id == instance_id) { tgt = &ml; break; }
+    if (!tgt) for (auto& ml : tracker.pending) if (ml.instance_id == instance_id) { tgt = &ml; break; }
+    if (!tgt) { fprintf(stderr, "%s: instance %d not found\n", __func__, instance_id); return false; }
+    sam3_pvs_params pvs; pvs.pos_points = pos_points; pvs.neg_points = neg_points; pvs.multimask = false;
+    auto r = sam3_segment_pvs(state, model, pvs);
+    if (r.detections.empty()) return false;
+    tgt->last_score = r.detections[0].score; tgt->last_seen = tracker.frame_index;
+    std::vector<float> op(D, 0.0f);
+    sam3_store_obj_ptr(tracker, model, instance_id, op.data(), tracker.frame_index);
+    fprintf(stderr, "%s: refined instance %d\n", __func__, instance_id);
+    return true;
 }
 
-int sam3_tracker_frame_index(const sam3_tracker& tracker) {
-    return tracker.frame_index;
-}
+int sam3_tracker_frame_index(const sam3_tracker& tracker) { return tracker.frame_index; }
 
 void sam3_tracker_reset(sam3_tracker& tracker) {
-    tracker.frame_index = 0;
-    tracker.next_inst_id = 1;
-    tracker.masklets.clear();
-    tracker.pending.clear();
-    tracker.mem_banks.clear();
-    tracker.ptr_banks.clear();
+    tracker.frame_index = 0; tracker.next_inst_id = 1;
+    tracker.masklets.clear(); tracker.pending.clear();
+    tracker.mem_banks.clear(); tracker.ptr_banks.clear();
+    for (auto* b : tracker.owned_buffers) if (b) ggml_backend_buffer_free(b);
+    tracker.owned_buffers.clear();
+    if (tracker.ctx) { ggml_free(tracker.ctx); tracker.ctx = nullptr; }
+    if (tracker.buffer) { ggml_backend_buffer_free(tracker.buffer); tracker.buffer = nullptr; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
