@@ -3254,10 +3254,12 @@ static struct ggml_tensor* sam3_compute_box_rpb(
     const auto& tensors = model.tensors;
 
     // ── 1. Convert cxcywh → xyxy ─────────────────────────────────────────
-    auto* cx = ggml_view_2d(ctx, ref_boxes, 1, NQ, ref_boxes->nb[1], 0);
-    auto* cy = ggml_view_2d(ctx, ref_boxes, 1, NQ, ref_boxes->nb[1], 1 * sizeof(float));
-    auto* bw = ggml_view_2d(ctx, ref_boxes, 1, NQ, ref_boxes->nb[1], 2 * sizeof(float));
-    auto* bh = ggml_view_2d(ctx, ref_boxes, 1, NQ, ref_boxes->nb[1], 3 * sizeof(float));
+    // ggml_view_2d on strided data is non-contiguous — ggml_scale requires contiguous.
+    // Use ggml_cont to make each coordinate slice contiguous.
+    auto* cx = ggml_cont(ctx, ggml_view_2d(ctx, ref_boxes, 1, NQ, ref_boxes->nb[1], 0));
+    auto* cy = ggml_cont(ctx, ggml_view_2d(ctx, ref_boxes, 1, NQ, ref_boxes->nb[1], 1 * sizeof(float)));
+    auto* bw = ggml_cont(ctx, ggml_view_2d(ctx, ref_boxes, 1, NQ, ref_boxes->nb[1], 2 * sizeof(float)));
+    auto* bh = ggml_cont(ctx, ggml_view_2d(ctx, ref_boxes, 1, NQ, ref_boxes->nb[1], 3 * sizeof(float)));
     // x0 = cx - w/2, x1 = cx + w/2
     auto* half_w = ggml_scale(ctx, bw, 0.5f);
     auto* half_h = ggml_scale(ctx, bh, 0.5f);
@@ -5997,8 +5999,17 @@ bool sam3_dump_state_tensor(const sam3_state& state,
         if (t->ne[i] > 0) numel *= t->ne[i];
     }
 
+    fprintf(stderr, "%s: tensor type=%d (0=f32, 1=f16)\n", __func__, (int)t->type);
+
     std::vector<float> data(numel);
-    ggml_backend_tensor_get(t, data.data(), 0, numel * sizeof(float));
+    if (t->type == GGML_TYPE_F16) {
+        // Read f16 and convert
+        std::vector<ggml_fp16_t> f16_data(numel);
+        ggml_backend_tensor_get(t, f16_data.data(), 0, numel * sizeof(ggml_fp16_t));
+        ggml_fp16_to_fp32_row(f16_data.data(), data.data(), numel);
+    } else {
+        ggml_backend_tensor_get(t, data.data(), 0, numel * sizeof(float));
+    }
 
     // Write binary file
     {

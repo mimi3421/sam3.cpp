@@ -6,3 +6,6 @@ target_link_libraries(test_tokenizer PRIVATE sam3)
 
 add_executable(test_vit test_vit.cpp)
 target_link_libraries(test_vit PRIVATE sam3)
+
+add_executable(test_phase5 test_phase5.cpp)
+target_link_libraries(test_phase5 PRIVATE sam3)
