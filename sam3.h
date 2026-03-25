@@ -162,3 +162,9 @@ sam3_video_info sam3_get_video_info(const std::string & video_path);
 
 bool                  sam3_test_load_tokenizer(const std::string & dir);
 std::vector<int32_t>  sam3_test_tokenize(const std::string & text);
+
+// ─── Debug: dump state tensors to files for verification ───
+
+bool sam3_dump_state_tensor(const sam3_state & state,
+                             const std::string & tensor_name,
+                             const std::string & output_path);
