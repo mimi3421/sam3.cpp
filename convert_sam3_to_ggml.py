@@ -79,6 +79,7 @@ def rename_key(k: str) -> str | None:
         "attn_mask",                       # causal mask (deterministic, recomputed)
         ".dac_",                           # DAC dual supervision (training)
         "_dn_",                            # denoising queries (training)
+        "text_projection",                 # unused in SAM3 inference (pooled output discarded by VETextEncoder)
     ]
     for pat in skip_patterns:
         if pat in k:
@@ -105,8 +106,6 @@ def rename_key(k: str) -> str | None:
                    "text.token_embed.")
     k = k.replace("detector.backbone.language_backbone.encoder.positional_embedding",
                    "text.pos_embed")
-    k = k.replace("detector.backbone.language_backbone.encoder.text_projection",
-                   "text.text_projection")
     k = k.replace("detector.backbone.language_backbone.encoder.ln_final.",
                    "text.ln_final.")
     k = k.replace("detector.backbone.language_backbone.resizer.",
@@ -208,7 +207,6 @@ def write_tensor(fout, name: str, data: np.ndarray, ftype: int):
                and "tpos" not in name
                and "pe_gaussian" not in name
                and "freqs_cis" not in name
-               and "text_projection" not in name
                and "token" not in name
                and "no_obj" not in name
                and "no_mem" not in name
