@@ -30,6 +30,16 @@ def save_tensor(path, t):
     print(f"  saved {path} shape={list(t.shape)}")
 
 
+def save_tensor_i32(path, t):
+    t = t.detach().cpu().to(torch.int32).contiguous()
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path + ".bin", "wb") as f:
+        f.write(t.numpy().tobytes())
+    with open(path + ".shape", "w") as f:
+        f.write(",".join(str(d) for d in t.shape))
+    print(f"  saved {path} shape={list(t.shape)} dtype=int32")
+
+
 # ── Inlined helpers ─────────────────────────────────────────────────────
 
 def inverse_sigmoid(x, eps=1e-3):
@@ -104,8 +114,18 @@ def multihead_attention_forward(query, key, value, w_q, b_q, w_k, b_k, w_v, b_v,
     K = K.reshape(BS, N_kv, num_heads, HD).permute(0, 2, 1, 3)
     V = V.reshape(BS, N_kv, num_heads, HD).permute(0, 2, 1, 3)
 
+    combined_mask = attn_mask
+    if key_padding_mask is not None:
+        pad_bias = torch.zeros(
+            BS, 1, 1, N_kv, dtype=Q.dtype, device=Q.device
+        )
+        pad_bias = pad_bias.masked_fill(
+            key_padding_mask[:, None, None, :], float("-inf")
+        )
+        combined_mask = pad_bias if combined_mask is None else combined_mask + pad_bias
+
     # Attention
-    attn_output = F.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask)
+    attn_output = F.scaled_dot_product_attention(Q, K, V, attn_mask=combined_mask)
 
     # [BS, NH, N_q, HD] -> [BS, N_q, D]
     attn_output = attn_output.permute(0, 2, 1, 3).reshape(BS, N_q, D)
@@ -210,6 +230,9 @@ def main():
 
     tokens_tensor = torch.tensor([token_ids], dtype=torch.long, device=device)  # [1, T]
     print(f"  Token IDs: {token_ids[:10]}...")
+    save_tensor_i32(os.path.join(args.outdir, "token_ids"), tokens_tensor)
+    with open(os.path.join(args.outdir, "prompt.txt"), "w") as f:
+        f.write(args.text + "\n")
 
     # Text encoder forward
     text_prefix = "detector.backbone.language_backbone.encoder."
@@ -314,10 +337,16 @@ def main():
 
         # Text mask: True for padding (0 tokens), False for valid
         txt_mask = torch.tensor([[tid == 0 for tid in token_ids]], dtype=torch.bool)  # [1, T]
+        valid_scale = float(T) / max(1, sum(tid != 0 for tid in token_ids))
+        text_valid_mask = torch.tensor(
+            [[[valid_scale if tid != 0 else 0.0] for tid in token_ids]],
+            dtype=torch.float32,
+        ).permute(1, 2, 0)  # [T, 1, 1]
 
         save_tensor(os.path.join(args.outdir, "fenc_img_input"), img_feat_flat)
         save_tensor(os.path.join(args.outdir, "fenc_pos_embed"), img_pe_flat)
         save_tensor(os.path.join(args.outdir, "fenc_prompt"), prompt_bf)
+        save_tensor(os.path.join(args.outdir, "text_valid_mask"), text_valid_mask)
 
         # Forward through 6 fusion encoder layers
         output = img_feat_flat  # [1, HW, D] batch-first
@@ -362,7 +391,7 @@ def main():
                 xn, prompt_bf, prompt_bf,
                 w_q_ca, b_q_ca, w_k_ca, b_k_ca, w_v_ca, b_v_ca,
                 ca_out_w, ca_out_b, NH,
-                key_padding_mask=None)  # We're not using key_padding_mask here for simplicity
+                key_padding_mask=txt_mask)
 
             output = shortcut + ca_out
 
@@ -496,6 +525,8 @@ def main():
             tgt_with_pres = tgt_with_pres + sa_out.permute(1, 0, 2)
             tgt_with_pres = F.layer_norm(tgt_with_pres, [D],
                                           ddec_sd[lp + "norm2.weight"], ddec_sd[lp + "norm2.bias"])
+            if layer_idx == 0:
+                save_tensor(os.path.join(args.outdir, "ddec_layer0_after_sa"), tgt_with_pres)
 
             # ── Text cross-attention ─────────────────────────────────
             tgt_q_ca_text = tgt_with_pres + qpos_with_pres
@@ -516,11 +547,14 @@ def main():
             p_bf = prompt_sf.permute(1, 0, 2)  # [1, T, D]
             ct_out = multihead_attention_forward(tq_bf, p_bf, p_bf,
                                                   w_q_ct, b_q_ct, w_k_ct, b_k_ct, w_v_ct, b_v_ct,
-                                                  ca_text_ow, ca_text_ob, NH)
+                                                  ca_text_ow, ca_text_ob, NH,
+                                                  key_padding_mask=txt_mask)
             tgt_with_pres = tgt_with_pres + ct_out.permute(1, 0, 2)
             tgt_with_pres = F.layer_norm(tgt_with_pres, [D],
                                           ddec_sd[lp + "catext_norm.weight"],
                                           ddec_sd[lp + "catext_norm.bias"])
+            if layer_idx == 0:
+                save_tensor(os.path.join(args.outdir, "ddec_layer0_after_text_ca"), tgt_with_pres)
 
             # ── Image cross-attention with RPB ──────────────────────
             tgt_q_ca_img = tgt_with_pres + qpos_with_pres
@@ -553,6 +587,8 @@ def main():
             tgt_with_pres = tgt_with_pres + ci_out.permute(1, 0, 2)
             tgt_with_pres = F.layer_norm(tgt_with_pres, [D],
                                           ddec_sd[lp + "norm1.weight"], ddec_sd[lp + "norm1.bias"])
+            if layer_idx == 0:
+                save_tensor(os.path.join(args.outdir, "ddec_layer0_after_img_ca"), tgt_with_pres)
 
             # ── FFN ─────────────────────────────────────────────────
             ffn = F.linear(tgt_with_pres, ddec_sd[lp + "linear1.weight"], ddec_sd[lp + "linear1.bias"])
@@ -561,6 +597,8 @@ def main():
             tgt_with_pres = tgt_with_pres + ffn
             tgt_with_pres = F.layer_norm(tgt_with_pres, [D],
                                           ddec_sd[lp + "norm3.weight"], ddec_sd[lp + "norm3.bias"])
+            if layer_idx == 0:
+                save_tensor(os.path.join(args.outdir, "ddec_layer0_full_out"), tgt_with_pres)
 
             # Split presence and queries
             presence_out = tgt_with_pres[:1]  # [1, 1, D]
@@ -669,7 +707,8 @@ def main():
         p_bf = prompt_sf.permute(1, 0, 2)
         ca_out = multihead_attention_forward(tgt2_bf, p_bf, p_bf,
                                               w_q, b_q, w_k, b_k, w_v, b_v,
-                                              ca_ow, ca_ob, NH)
+                                              ca_ow, ca_ob, NH,
+                                              key_padding_mask=txt_mask)
         enc_hs = enc_hs + ca_out.permute(1, 0, 2)
         save_tensor(os.path.join(args.outdir, "seg_enc_after_ca"), enc_hs)
 

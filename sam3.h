@@ -170,6 +170,25 @@ bool sam3_test_dump_text_encoder(const sam3_model & model,
                                  const std::string & output_dir,
                                  int n_threads = 4);
 
+// Test-only: run the full phase 5 detector path (fusion encoder + DETR decoder
+// + dot-product scoring + segmentation head) on an already encoded image state
+// and dump standard intermediate tensors to <output_dir>/<tensor_name>.{bin,shape}.
+bool sam3_test_dump_phase5(const sam3_model & model,
+                           const sam3_state & state,
+                           const std::vector<int32_t> & token_ids,
+                           const std::string & output_dir,
+                           int n_threads = 4);
+
+// Test-only: run the phase 5 detector path from pre-dumped phase inputs
+// instead of re-running the image/text encoders. This isolates the detector
+// numerics from earlier phases and is intended for cross-phase regression tests.
+bool sam3_test_dump_phase5_from_ref_inputs(const sam3_model & model,
+                                           const std::vector<int32_t> & token_ids,
+                                           const std::string & prephase_ref_dir,
+                                           const std::string & phase5_ref_dir,
+                                           const std::string & output_dir,
+                                           int n_threads = 4);
+
 // ─── Debug: dump state tensors to files for verification ───
 
 bool sam3_dump_state_tensor(const sam3_state & state,

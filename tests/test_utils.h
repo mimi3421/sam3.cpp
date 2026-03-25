@@ -42,6 +42,9 @@ struct compare_result {
     float cosine_sim = 0.0f;
     int n_bad = 0;
     int n_total = 0;
+    int worst_index = -1;
+    float worst_a = 0.0f;
+    float worst_b = 0.0f;
 };
 
 static inline std::vector<int> load_shape_file(const std::string & path) {
@@ -127,6 +130,9 @@ static inline compare_result compare_tensors(const float * a,
 
         if (diff > r.max_diff) {
             r.max_diff = diff;
+            r.worst_index = i;
+            r.worst_a = a[i];
+            r.worst_b = b[i];
         }
         if (diff > atol) {
             r.n_bad++;
