@@ -228,3 +228,12 @@ bool sam3_test_dump_phase7_from_ref_inputs(const sam3_model & model,
 bool sam3_dump_state_tensor(const sam3_state & state,
                              const std::string & tensor_name,
                              const std::string & output_path);
+
+// Test-only: encode an image from pre-preprocessed float data (CHW layout, already
+// resized to img_size x img_size and normalized).  This bypasses the C++ preprocessing
+// so that numerical comparisons against the Python reference are not polluted by
+// differences in image resize implementations.
+bool sam3_encode_image_from_preprocessed(sam3_state       & state,
+                                          const sam3_model & model,
+                                          const float      * chw_data,
+                                          int                img_size);

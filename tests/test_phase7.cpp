@@ -16,6 +16,7 @@ struct phase7_case {
 struct tensor_case {
     std::string name;
     std::string label;
+    float tol;
 };
 
 struct report_row {
@@ -80,35 +81,39 @@ static std::vector<tensor_case> tensor_cases_for(const std::string & case_dir) {
     const auto meta = load_meta(case_dir + "/meta.txt");
     const int num_slots = meta.count("num_slots") ? std::stoi(meta.at("num_slots")) : 0;
 
+    // Tolerances: pix_proj/obj_ptr/attn_input/sa_l0 are tight (1e-4).
+    // Memory encoder stages accumulate error through bilinear+conv chain (1e-2).
+    // Memory attention inherits encoder error non-hermetically (5e-3).
+    // Propagation accumulates through full pipeline (1e-2).
     for (int i = 0; i < num_slots; ++i) {
         cases.push_back({"phase7_mem" + std::to_string(i) + "_pix_proj",
-                         "Memory slot " + std::to_string(i) + " pixel projection"});
+                         "Memory slot " + std::to_string(i) + " pixel projection", 1e-4f});
         cases.push_back({"phase7_mem" + std::to_string(i) + "_fused_input",
-                         "Memory slot " + std::to_string(i) + " fused input"});
+                         "Memory slot " + std::to_string(i) + " fused input", 2e-3f});
         cases.push_back({"phase7_mem" + std::to_string(i) + "_fuser0",
-                         "Memory slot " + std::to_string(i) + " fuser block 0"});
+                         "Memory slot " + std::to_string(i) + " fuser block 0", 1e-2f});
         cases.push_back({"phase7_mem" + std::to_string(i) + "_fuser1",
-                         "Memory slot " + std::to_string(i) + " fuser block 1"});
+                         "Memory slot " + std::to_string(i) + " fuser block 1", 1e-2f});
         cases.push_back({"phase7_mem" + std::to_string(i) + "_output",
-                         "Memory slot " + std::to_string(i) + " encoder output"});
+                         "Memory slot " + std::to_string(i) + " encoder output", 1e-2f});
         cases.push_back({"phase7_obj_ptr" + std::to_string(i),
-                         "Memory slot " + std::to_string(i) + " object pointer"});
+                         "Memory slot " + std::to_string(i) + " object pointer", 1e-4f});
     }
 
-    cases.push_back({"phase7_mem_attn_input", "Memory attention input"});
+    cases.push_back({"phase7_mem_attn_input", "Memory attention input", 1e-4f});
     for (int i = 0; i < 4; ++i) {
         cases.push_back({"phase7_mem_attn_layer" + std::to_string(i) + "_after_sa",
-                         "Memory attention layer " + std::to_string(i) + " after self-attn"});
+                         "Memory attention layer " + std::to_string(i) + " after self-attn", 5e-3f});
         cases.push_back({"phase7_mem_attn_layer" + std::to_string(i) + "_after_ca",
-                         "Memory attention layer " + std::to_string(i) + " after cross-attn"});
+                         "Memory attention layer " + std::to_string(i) + " after cross-attn", 5e-3f});
         cases.push_back({"phase7_mem_attn_layer" + std::to_string(i) + "_after_ffn",
-                         "Memory attention layer " + std::to_string(i) + " after FFN"});
+                         "Memory attention layer " + std::to_string(i) + " after FFN", 5e-3f});
     }
-    cases.push_back({"phase7_mem_attn_output", "Memory attention final output"});
-    cases.push_back({"phase7_prop_masks", "Propagation mask logits"});
-    cases.push_back({"phase7_prop_iou", "Propagation IoU"});
-    cases.push_back({"phase7_prop_obj_score", "Propagation object score"});
-    cases.push_back({"phase7_prop_sam_token", "Propagation SAM token"});
+    cases.push_back({"phase7_mem_attn_output", "Memory attention final output", 5e-3f});
+    cases.push_back({"phase7_prop_masks", "Propagation mask logits", 1e-2f});
+    cases.push_back({"phase7_prop_iou", "Propagation IoU", 1e-3f});
+    cases.push_back({"phase7_prop_obj_score", "Propagation object score", 1e-3f});
+    cases.push_back({"phase7_prop_sam_token", "Propagation SAM token", 1e-2f});
     return cases;
 }
 
@@ -172,6 +177,7 @@ int main(int argc, char ** argv) {
             report_row row;
             row.case_id = tc.id;
             row.label = tensor.label;
+            row.tol = tensor.tol;
 
             if (ref.data.empty() || got.data.empty()) {
                 row.status = "FAIL";

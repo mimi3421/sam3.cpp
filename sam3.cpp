@@ -2953,6 +2953,169 @@ bool sam3_encode_image(sam3_state& state,
     return true;
 }
 
+// Test-only: encode from pre-preprocessed float data (bypasses C++ resize/normalize).
+// chw_data is in [C, H, W] layout, already normalized, with C=3, H=W=img_size.
+bool sam3_encode_image_from_preprocessed(sam3_state& state,
+                                          const sam3_model& model,
+                                          const float* chw_data,
+                                          int img_size) {
+    auto t_start = std::chrono::high_resolution_clock::now();
+    const auto& hp = model.hparams;
+
+    if (img_size != hp.img_size) {
+        fprintf(stderr, "%s: img_size mismatch: got %d, expected %d\n",
+                __func__, img_size, hp.img_size);
+        return false;
+    }
+
+    fprintf(stderr, "%s: encoding from preprocessed %dx%d\n", __func__, img_size, img_size);
+
+    state.orig_width = img_size;
+    state.orig_height = img_size;
+
+    // ── Build computation graph ──
+    const size_t buf_size = ggml_tensor_overhead() * 8192 + ggml_graph_overhead() * 2;
+    struct ggml_init_params gparams = {
+        /*.mem_size   =*/buf_size,
+        /*.mem_buffer =*/nullptr,
+        /*.no_alloc   =*/true,
+    };
+    struct ggml_context* ctx0 = ggml_init(gparams);
+    if (!ctx0) {
+        fprintf(stderr, "%s: failed to init compute context\n", __func__);
+        return false;
+    }
+
+    auto* inp = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, img_size, img_size, 3, 1);
+    ggml_set_name(inp, "input_image");
+    ggml_set_input(inp);
+
+    auto* vit_out = sam3_build_vit_graph(ctx0, inp, model);
+    ggml_set_name(vit_out, "vit_output");
+    ggml_set_output(vit_out);
+
+    struct ggml_tensor* neck_det_out[4];
+    struct ggml_tensor* neck_trk_out[4];
+    sam3_build_neck_graph(ctx0, vit_out, model.neck_det, neck_det_out);
+    sam3_build_neck_graph(ctx0, vit_out, model.neck_trk, neck_trk_out);
+
+    for (int i = 0; i < 4; ++i) {
+        char name[64];
+        snprintf(name, sizeof(name), "neck_det_%d", i);
+        ggml_set_name(neck_det_out[i], name);
+        ggml_set_output(neck_det_out[i]);
+        snprintf(name, sizeof(name), "neck_trk_%d", i);
+        ggml_set_name(neck_trk_out[i], name);
+        ggml_set_output(neck_trk_out[i]);
+    }
+
+    struct ggml_cgraph* graph = ggml_new_graph_custom(ctx0, 16384, false);
+    for (int i = 0; i < 4; ++i) {
+        ggml_build_forward_expand(graph, neck_det_out[i]);
+        ggml_build_forward_expand(graph, neck_trk_out[i]);
+    }
+
+    auto* galloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+
+    if (!ggml_gallocr_reserve(galloc, graph)) {
+        fprintf(stderr, "%s: failed to reserve graph memory\n", __func__);
+        ggml_gallocr_free(galloc);
+        ggml_free(ctx0);
+        return false;
+    }
+
+    if (!ggml_gallocr_alloc_graph(galloc, graph)) {
+        fprintf(stderr, "%s: failed to allocate graph\n", __func__);
+        ggml_gallocr_free(galloc);
+        ggml_free(ctx0);
+        return false;
+    }
+
+    // Upload preprocessed data directly (already in CHW = ggml [W, H, C, B] layout)
+    const size_t data_bytes = (size_t)3 * img_size * img_size * sizeof(float);
+    ggml_backend_tensor_set(inp, chw_data, 0, data_bytes);
+
+    // Compute
+    {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        sam3_graph_compute(model.backend, graph, state.n_threads);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        fprintf(stderr, "%s: graph computed in %.1f ms (%d threads)\n",
+                __func__, ms, state.n_threads);
+    }
+
+    // Cache results in state
+    if (state.galloc) ggml_gallocr_free(state.galloc);
+    if (state.ctx) ggml_free(state.ctx);
+
+    state.ctx = ctx0;
+    state.galloc = galloc;
+    state.backend = model.backend;
+    state.vit_output = vit_out;
+
+    for (int i = 0; i < 4; ++i) {
+        state.neck_det[i] = neck_det_out[i];
+        state.neck_trk[i] = neck_trk_out[i];
+    }
+
+    // Compute sinusoidal PEs
+    {
+        const int neck_dim = hp.neck_dim;
+        const int scale_sizes[4] = {
+            hp.n_img_embd() * 4,
+            hp.n_img_embd() * 2,
+            hp.n_img_embd(),
+            hp.n_img_embd() / 2,
+        };
+
+        if (state.pe_buf) {
+            ggml_backend_buffer_free(state.pe_buf);
+            state.pe_buf = nullptr;
+        }
+        if (state.pe_ctx) {
+            ggml_free(state.pe_ctx);
+            state.pe_ctx = nullptr;
+        }
+
+        struct ggml_init_params pe_params = {
+            /*.mem_size   =*/ggml_tensor_overhead() * 4 + 256,
+            /*.mem_buffer =*/nullptr,
+            /*.no_alloc   =*/true,
+        };
+        state.pe_ctx = ggml_init(pe_params);
+
+        struct ggml_tensor* pe_tensors[4];
+        for (int i = 0; i < 4; ++i) {
+            const int S = scale_sizes[i];
+            pe_tensors[i] = ggml_new_tensor_4d(state.pe_ctx, GGML_TYPE_F32, neck_dim, S, S, 1);
+            char name[64];
+            snprintf(name, sizeof(name), "pe_%d", i);
+            ggml_set_name(pe_tensors[i], name);
+        }
+
+        state.pe_buf = ggml_backend_alloc_ctx_tensors(state.pe_ctx, model.backend);
+        if (!state.pe_buf) {
+            fprintf(stderr, "%s: failed to allocate PE buffer\n", __func__);
+        } else {
+            for (int i = 0; i < 4; ++i) {
+                const int S = scale_sizes[i];
+                auto pe_data = sam3_sinusoidal_pe_2d(S, S, neck_dim);
+                ggml_backend_tensor_set(pe_tensors[i], pe_data.data(), 0, pe_data.size() * sizeof(float));
+                state.neck_det_pe[i] = pe_tensors[i];
+                state.neck_trk_pe[i] = pe_tensors[i];
+            }
+        }
+    }
+
+    state.pe_cache_valid = false;
+
+    auto t_end = std::chrono::high_resolution_clock::now();
+    double total_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+    fprintf(stderr, "%s: encoded successfully in %.1f ms\n", __func__, total_ms);
+    return true;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Multi-head attention helper (used by fusion encoder, DETR decoder, seg head)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -4125,8 +4288,10 @@ static struct ggml_tensor* sam3_cxblock_forward(
     // ggml conv expects WHCB layout; internal feature maps are stored as CWHB.
     auto* x_whcb = ggml_cont(ctx, ggml_permute(ctx, x, 2, 0, 1, 3));
 
-    // Depthwise conv (groups = D): use the direct depthwise path to support fp32 refs.
-    auto* h = ggml_conv_2d_dw_direct(ctx, dw_w, x_whcb, 1, 1, 3, 3, 1, 1);
+    // Depthwise conv (groups = D): use the direct depthwise path.
+    // ggml_conv_2d_dw_direct only supports f32 kernel — cast if needed.
+    auto* dw_w_f32 = (dw_w->type == GGML_TYPE_F32) ? dw_w : ggml_cast(ctx, dw_w, GGML_TYPE_F32);
+    auto* h = ggml_conv_2d_dw_direct(ctx, dw_w_f32, x_whcb, 1, 1, 3, 3, 1, 1);
     h = ggml_add(ctx, h, ggml_reshape_4d(ctx, dw_b, 1, 1, D, 1));
     h = ggml_cont(ctx, ggml_permute(ctx, h, 1, 2, 0, 3));
 
@@ -4410,7 +4575,7 @@ static void sam3_extract_obj_ptr_cpu(
     const int D = model.hparams.neck_dim;
     const float occlusion_threshold = 0.0f;
 
-    if (obj_score < occlusion_threshold) {
+    if (obj_score <= occlusion_threshold) {
         ggml_backend_tensor_get(model.no_obj_ptr, out_ptr, 0, D * sizeof(float));
         return;
     }
@@ -5691,8 +5856,9 @@ sam3_result sam3_segment_pvs(sam3_state& state,
         // Sparse embeddings — only this changes per call
         std::vector<float> sparse_data(N_pts * D, 0.0f);
         for (int p = 0; p < N_pts; ++p) {
-            float px = all_coords[p * 2 + 0] + 0.5f;
-            float py = all_coords[p * 2 + 1] + 0.5f;
+            // Scale from original image space to model input space, then shift to pixel center
+            float px = all_coords[p * 2 + 0] / (float)state.orig_width  * (float)hp.img_size + 0.5f;
+            float py = all_coords[p * 2 + 1] / (float)state.orig_height * (float)hp.img_size + 0.5f;
             float x_norm = px / (float)hp.img_size;
             float y_norm = py / (float)hp.img_size;
             float pe_vec[256];

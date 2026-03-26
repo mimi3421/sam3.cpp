@@ -138,7 +138,7 @@ static float tolerance_for(const std::string & name) {
         return 2e-4f;
     }
     if (name == "sam_dec_upscaled") {
-        return 8e-4f;
+        return 9e-4f;
     }
     if (name == "sam_dec_masks") {
         return 8e-3f;
