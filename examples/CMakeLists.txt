@@ -1,6 +1,10 @@
 # Example executables for sam3.cpp
-# SDL2 + ImGui are optional — build only if SDL2 is found.
 
+# Quantization tool (no GUI dependency)
+add_executable(sam3_quantize quantize.cpp)
+target_link_libraries(sam3_quantize PRIVATE ggml)
+
+# SDL2 + ImGui are optional — build only if SDL2 is found.
 find_package(SDL2 QUIET)
 
 if(SDL2_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/CMakeLists.txt")

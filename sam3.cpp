@@ -680,6 +680,26 @@ static struct ggml_tensor* sam3_layer_norm_2d(struct ggml_context* ctx,
     return x;
 }
 
+// Read tensor data from backend into a float buffer, handling F32, F16, and
+// quantized types.  n = number of float elements to produce.
+static void sam3_read_f32(struct ggml_tensor* t, float* dst, int64_t n) {
+    if (t->type == GGML_TYPE_F32) {
+        ggml_backend_tensor_get(t, dst, 0, n * sizeof(float));
+    } else if (t->type == GGML_TYPE_F16) {
+        std::vector<ggml_fp16_t> tmp(n);
+        ggml_backend_tensor_get(t, tmp.data(), 0, n * sizeof(ggml_fp16_t));
+        ggml_fp16_to_fp32_row(tmp.data(), dst, (int)n);
+    } else if (ggml_is_quantized(t->type)) {
+        const size_t nbytes = ggml_nbytes(t);
+        std::vector<uint8_t> raw(nbytes);
+        ggml_backend_tensor_get(t, raw.data(), 0, nbytes);
+        const auto * traits = ggml_get_type_traits(t->type);
+        traits->to_float(raw.data(), dst, n);
+    } else {
+        fprintf(stderr, "%s: unsupported tensor type %d\n", __func__, (int)t->type);
+    }
+}
+
 static struct ggml_tensor* sam3_conv_transpose_weight(struct ggml_context* ctx,
                                                       struct ggml_tensor* w) {
     return w->type == GGML_TYPE_F16 ? w : ggml_cast(ctx, w, GGML_TYPE_F16);
@@ -1273,21 +1293,25 @@ static void sam3_register_tensors(sam3_model& model) {
         return t;
     };
     const ggml_type WTYPE = model.weight_type;
+    const int64_t   WBLK  = ggml_blck_size(WTYPE);  // 1 for F32/F16, 32 for Q4/Q8
 
     auto T2 = [&](const std::string& name, int64_t d0, int64_t d1) -> ggml_tensor* {
-        auto* t = ggml_new_tensor_2d(ctx, WTYPE, d0, d1);
+        const ggml_type type = (d0 % WBLK == 0) ? WTYPE : GGML_TYPE_F32;
+        auto* t = ggml_new_tensor_2d(ctx, type, d0, d1);
         ggml_set_name(t, name.c_str());
         tensors[name] = t;
         return t;
     };
     auto T3 = [&](const std::string& name, int64_t d0, int64_t d1, int64_t d2) -> ggml_tensor* {
-        auto* t = ggml_new_tensor_3d(ctx, WTYPE, d0, d1, d2);
+        const ggml_type type = (d0 % WBLK == 0) ? WTYPE : GGML_TYPE_F32;
+        auto* t = ggml_new_tensor_3d(ctx, type, d0, d1, d2);
         ggml_set_name(t, name.c_str());
         tensors[name] = t;
         return t;
     };
     auto T4 = [&](const std::string& name, int64_t d0, int64_t d1, int64_t d2, int64_t d3) -> ggml_tensor* {
-        auto* t = ggml_new_tensor_4d(ctx, WTYPE, d0, d1, d2, d3);
+        const ggml_type type = (d0 % WBLK == 0) ? WTYPE : GGML_TYPE_F32;
+        auto* t = ggml_new_tensor_4d(ctx, type, d0, d1, d2, d3);
         ggml_set_name(t, name.c_str());
         tensors[name] = t;
         return t;
@@ -1490,7 +1514,7 @@ static void sam3_register_tensors(sam3_model& model) {
     // boxRPB MLPs (x and y, each 2 layers)
     for (const auto& axis : {"x", "y"}) {
         auto bp = std::string("ddec.boxRPB_embed_") + axis;
-        tensors[bp + ".layers.0.weight"] = ggml_new_tensor_2d(ctx, WTYPE, 2, D);
+        tensors[bp + ".layers.0.weight"] = ggml_new_tensor_2d(ctx, (2 % WBLK == 0) ? WTYPE : GGML_TYPE_F32, 2, D);
         tensors[bp + ".layers.0.bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, D);
         tensors[bp + ".layers.1.weight"] = ggml_new_tensor_2d(ctx, WTYPE, D, hp.ddec_heads);
         tensors[bp + ".layers.1.bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hp.ddec_heads);
@@ -1550,7 +1574,8 @@ static void sam3_register_tensors(sam3_model& model) {
 
     // ── DotProductScoring ────────────────────────────────────────────────
     auto reg = [&](const std::string& n, int64_t d0, int64_t d1, bool is_f32 = false) {
-        auto* t = ggml_new_tensor_2d(ctx, is_f32 ? GGML_TYPE_F32 : WTYPE, d0, d1);
+        const ggml_type rtype = (is_f32 || d0 % WBLK != 0) ? GGML_TYPE_F32 : WTYPE;
+        auto* t = ggml_new_tensor_2d(ctx, rtype, d0, d1);
         ggml_set_name(t, n.c_str());
         tensors[n] = t;
         return t;
@@ -1562,7 +1587,8 @@ static void sam3_register_tensors(sam3_model& model) {
         return t;
     };
     auto reg4 = [&](const std::string& n, int64_t d0, int64_t d1, int64_t d2, int64_t d3) {
-        auto* t = ggml_new_tensor_4d(ctx, WTYPE, d0, d1, d2, d3);
+        const ggml_type rtype = (d0 % WBLK == 0) ? WTYPE : GGML_TYPE_F32;
+        auto* t = ggml_new_tensor_4d(ctx, rtype, d0, d1, d2, d3);
         ggml_set_name(t, n.c_str());
         tensors[n] = t;
         return t;
@@ -1918,11 +1944,19 @@ static bool sam3_load_tensors(std::ifstream& fin, sam3_model& model) {
 
         auto* tensor = it->second;
 
-        // Compute data size from file dtype
+        // Compute element count and data size from file dtype
         int64_t n_el = 1;
         for (auto d : shape) n_el *= d;
-        size_t file_elem_size = (dtype == 1 /*f16*/) ? 2 : 4;
-        size_t bytes = n_el * file_elem_size;
+
+        const ggml_type file_type = static_cast<ggml_type>(dtype);
+        size_t bytes;
+        if (ggml_is_quantized(file_type)) {
+            const int64_t n_rows = n_el / shape[0];
+            bytes = ggml_row_size(file_type, shape[0]) * n_rows;
+        } else {
+            const size_t file_elem_size = (file_type == GGML_TYPE_F16) ? 2 : 4;
+            bytes = n_el * file_elem_size;
+        }
 
         // Read into a temporary CPU buffer, then copy to backend
         std::vector<char> buf(bytes);
@@ -1933,8 +1967,7 @@ static bool sam3_load_tensors(std::ifstream& fin, sam3_model& model) {
         }
 
         // If the file dtype matches the registered tensor type, copy directly.
-        // Otherwise, convert f32 ↔ f16 as needed.
-        ggml_type file_type = (dtype == 1 /*f16*/) ? GGML_TYPE_F16 : GGML_TYPE_F32;
+        // Otherwise, convert as needed (f16<->f32, or dequantize->f32).
         if (file_type == tensor->type) {
             ggml_backend_tensor_set(tensor, buf.data(), 0, bytes);
         } else if (file_type == GGML_TYPE_F16 && tensor->type == GGML_TYPE_F32) {
@@ -1949,8 +1982,21 @@ static bool sam3_load_tensors(std::ifstream& fin, sam3_model& model) {
             ggml_fp32_to_fp16_row(reinterpret_cast<const float*>(buf.data()),
                                   f16_buf.data(), n_el);
             ggml_backend_tensor_set(tensor, f16_buf.data(), 0, n_el * sizeof(ggml_fp16_t));
+        } else if (ggml_is_quantized(file_type) && tensor->type == GGML_TYPE_F32) {
+            // Dequantize → f32 (e.g., embedding stored quantized but registered as f32)
+            const auto * traits = ggml_get_type_traits(file_type);
+            if (!traits->to_float) {
+                fprintf(stderr, "%s: no dequantize function for '%s' (type=%s)\n",
+                        __func__, name.c_str(), ggml_type_name(file_type));
+                return false;
+            }
+            std::vector<float> f32_buf(n_el);
+            traits->to_float(buf.data(), f32_buf.data(), n_el);
+            ggml_backend_tensor_set(tensor, f32_buf.data(), 0, n_el * sizeof(float));
         } else {
-            fprintf(stderr, "%s: unsupported type conversion for '%s'\n", __func__, name.c_str());
+            fprintf(stderr, "%s: unsupported type conversion for '%s' (file=%s, tensor=%s)\n",
+                    __func__, name.c_str(), ggml_type_name(file_type),
+                    ggml_type_name(tensor->type));
             return false;
         }
         n_loaded++;
@@ -2003,7 +2049,20 @@ std::shared_ptr<sam3_model> sam3_load_model(const sam3_params& params) {
             __func__, version, ftype, n_tensors);
 
     auto model = std::make_shared<sam3_model>();
-    model->weight_type = (ftype == 0) ? GGML_TYPE_F32 : GGML_TYPE_F16;
+    {
+        ggml_type wtype;
+        switch (ftype) {
+            case 0:  wtype = GGML_TYPE_F32;  break;
+            case 1:  wtype = GGML_TYPE_F16;  break;
+            case 2:  wtype = GGML_TYPE_Q4_0; break;
+            case 3:  wtype = GGML_TYPE_Q4_1; break;
+            case 8:  wtype = GGML_TYPE_Q8_0; break;
+            default:
+                fprintf(stderr, "%s: unsupported ftype: %d\n", __func__, ftype);
+                return nullptr;
+        }
+        model->weight_type = wtype;
+    }
 
     // ── Read hyperparameters ─────────────────────────────────────────────
     if (!sam3_load_hparams(fin, model->hparams)) {
@@ -2453,19 +2512,17 @@ static struct ggml_tensor* sam3_vit_block_forward(struct ggml_context* ctx,
         K = ggml_reshape_3d(ctx, K, HD, W_cur * H_cur, NH * B_cur);
 
         V = ggml_reshape_4d(ctx, V, HD, NH, W_cur * H_cur, B_cur);
-        V = ggml_cont(ctx, ggml_permute(ctx, V, 0, 2, 1, 3));
-        V = ggml_reshape_3d(ctx, V, HD, W_cur * H_cur, NH * B_cur);
+        V = ggml_permute(ctx, V, 0, 2, 1, 3);  // [HD, N, NH, B_cur] non-contiguous view; flash_attn uses strides
 
-        // Apply RoPE to Q and K
+        // Apply RoPE to Q and K (V skips RoPE)
         if (blk.freqs_cis) {
             Q = sam3_apply_rope(ctx, Q, blk.freqs_cis);
             K = sam3_apply_rope(ctx, K, blk.freqs_cis);
         }
 
-        // Reshape for flash attention: [HD, N, NH, B_cur]
+        // Reshape Q, K for flash attention: [HD, N, NH, B_cur]
         Q = ggml_reshape_4d(ctx, Q, HD, W_cur * H_cur, NH, B_cur);
         K = ggml_reshape_4d(ctx, K, HD, W_cur * H_cur, NH, B_cur);
-        V = ggml_reshape_4d(ctx, V, HD, W_cur * H_cur, NH, B_cur);
 
         float scale = 1.0f / sqrtf((float)HD);
         auto* attn_out = ggml_flash_attn_ext(ctx, Q, K, V, nullptr, scale, 0.0f, 0.0f);
@@ -3548,13 +3605,7 @@ static std::vector<float> sam3_precompute_geom_input(
     std::vector<float> img_pre_norm_w_data(D), img_pre_norm_b_data(D);
 
     auto read_f32 = [](struct ggml_tensor* t, float* dst, size_t n) {
-        if (t->type == GGML_TYPE_F16) {
-            std::vector<ggml_fp16_t> tmp(n);
-            ggml_backend_tensor_get(t, tmp.data(), 0, n * sizeof(ggml_fp16_t));
-            ggml_fp16_to_fp32_row(tmp.data(), dst, (int)n);
-        } else {
-            ggml_backend_tensor_get(t, dst, 0, n * sizeof(float));
-        }
+        sam3_read_f32(t, dst, n);
     };
 
     read_f32(ge.box_proj_w, box_proj_w_data.data(), 4 * D);
@@ -4872,13 +4923,7 @@ static sam3_prompt_data sam3_build_prompt_and_pos(
     // Read maskmem_tpos_enc from model (one tensor [MD, 1, 1, 7])
     std::vector<float> tpos_all(MD * hp.num_maskmem);
     if (model.mem_enc.tpos[0]) {
-        if (model.mem_enc.tpos[0]->type == GGML_TYPE_F16) {
-            std::vector<ggml_fp16_t> tmp(tpos_all.size());
-            ggml_backend_tensor_get(model.mem_enc.tpos[0], tmp.data(), 0, tmp.size() * sizeof(ggml_fp16_t));
-            ggml_fp16_to_fp32_row(tmp.data(), tpos_all.data(), (int)tpos_all.size());
-        } else {
-            ggml_backend_tensor_get(model.mem_enc.tpos[0], tpos_all.data(), 0, tpos_all.size() * sizeof(float));
-        }
+        sam3_read_f32(model.mem_enc.tpos[0], tpos_all.data(), MD * hp.num_maskmem);
     }
 
     // 1. Spatial memory tokens
@@ -4905,20 +4950,8 @@ static sam3_prompt_data sam3_build_prompt_and_pos(
     // Read obj_ptr_tpos_proj weights for CPU-side matmul
     std::vector<float> tpos_w(D * MD), tpos_b(MD);
     if (model.obj_ptr_tpos_w) {
-        if (model.obj_ptr_tpos_w->type == GGML_TYPE_F16) {
-            std::vector<ggml_fp16_t> tmp(D * MD);
-            ggml_backend_tensor_get(model.obj_ptr_tpos_w, tmp.data(), 0, tmp.size() * sizeof(ggml_fp16_t));
-            ggml_fp16_to_fp32_row(tmp.data(), tpos_w.data(), D * MD);
-        } else {
-            ggml_backend_tensor_get(model.obj_ptr_tpos_w, tpos_w.data(), 0, tpos_w.size() * sizeof(float));
-        }
-        if (model.obj_ptr_tpos_b->type == GGML_TYPE_F16) {
-            std::vector<ggml_fp16_t> tmp(MD);
-            ggml_backend_tensor_get(model.obj_ptr_tpos_b, tmp.data(), 0, tmp.size() * sizeof(ggml_fp16_t));
-            ggml_fp16_to_fp32_row(tmp.data(), tpos_b.data(), MD);
-        } else {
-            ggml_backend_tensor_get(model.obj_ptr_tpos_b, tpos_b.data(), 0, tpos_b.size() * sizeof(float));
-        }
+        sam3_read_f32(model.obj_ptr_tpos_w, tpos_w.data(), D * MD);
+        sam3_read_f32(model.obj_ptr_tpos_b, tpos_b.data(), MD);
     }
 
     for (size_t p = 0; p < obj_ptrs.size(); ++p) {
@@ -5111,16 +5144,10 @@ static void sam3_extract_obj_ptr_cpu(
 
         int nel_w = (int)(w->ne[0] * w->ne[1]);
         std::vector<float> w_data(nel_w);
-        if (w->type == GGML_TYPE_F16) {
-            std::vector<ggml_fp16_t> w16(nel_w);
-            ggml_backend_tensor_get(w, w16.data(), 0, nel_w * sizeof(ggml_fp16_t));
-            ggml_fp16_to_fp32_row(w16.data(), w_data.data(), nel_w);
-        } else {
-            ggml_backend_tensor_get(w, w_data.data(), 0, nel_w * sizeof(float));
-        }
+        sam3_read_f32(w, w_data.data(), nel_w);
 
         std::vector<float> b_data(D);
-        ggml_backend_tensor_get(b, b_data.data(), 0, D * sizeof(float));
+        sam3_read_f32(b, b_data.data(), D);
 
         for (int o = 0; o < D; ++o) {
             float sum = b_data[o];
