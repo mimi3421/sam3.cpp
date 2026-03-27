@@ -55,3 +55,18 @@ target_link_libraries(test_llama_pcs PRIVATE sam3)
 add_executable(test_pvs_point test_pvs_point.cpp)
 target_link_libraries(test_pvs_point PRIVATE sam3)
 
+add_executable(test_video_2frame test_video_2frame.cpp)
+target_link_libraries(test_video_2frame PRIVATE sam3)
+
+add_executable(test_video_text test_video_text.cpp)
+target_link_libraries(test_video_text PRIVATE sam3)
+
+add_executable(test_metal_win test_metal_win.cpp)
+target_link_libraries(test_metal_win PRIVATE sam3)
+
+add_executable(test_metal_vit test_metal_vit.cpp)
+target_link_libraries(test_metal_vit PRIVATE sam3)
+
+add_executable(test_metal_conv_dw test_metal_conv_dw.cpp)
+target_link_libraries(test_metal_conv_dw PRIVATE sam3)
+
