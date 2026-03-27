@@ -21,3 +21,37 @@ target_link_libraries(test_phase4 PRIVATE sam3)
 
 add_executable(test_phase7 test_phase7.cpp)
 target_link_libraries(test_phase7 PRIVATE sam3)
+
+add_executable(test_debug_encoder test_debug_encoder.cpp)
+target_link_libraries(test_debug_encoder PRIVATE sam3)
+
+add_executable(test_preprocess_match test_preprocess_match.cpp)
+target_link_libraries(test_preprocess_match PRIVATE sam3)
+
+add_executable(test_jpeg_decode test_jpeg_decode.cpp)
+target_link_libraries(test_jpeg_decode PRIVATE sam3)
+
+add_executable(test_geom_enc test_geom_enc.cpp)
+target_link_libraries(test_geom_enc PRIVATE sam3)
+
+add_executable(test_debug_fenc test_debug_fenc.cpp)
+target_link_libraries(test_debug_fenc PRIVATE sam3)
+
+add_executable(test_text_enc_dump test_text_enc_dump.cpp)
+target_link_libraries(test_text_enc_dump PRIVATE sam3)
+
+add_executable(test_e2e_pvs test_e2e_pvs.cpp)
+target_link_libraries(test_e2e_pvs PRIVATE sam3)
+
+add_executable(test_e2e_pcs test_e2e_pcs.cpp)
+target_link_libraries(test_e2e_pcs PRIVATE sam3)
+
+add_executable(test_text_enc_cat test_text_enc_cat.cpp)
+target_link_libraries(test_text_enc_cat PRIVATE sam3)
+
+add_executable(test_llama_pcs test_llama_pcs.cpp)
+target_link_libraries(test_llama_pcs PRIVATE sam3)
+
+add_executable(test_pvs_point test_pvs_point.cpp)
+target_link_libraries(test_pvs_point PRIVATE sam3)
+
