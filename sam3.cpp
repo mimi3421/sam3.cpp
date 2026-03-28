@@ -34,7 +34,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 static constexpr uint32_t SAM3_MAGIC = 0x73616D33;  // "sam3"
-static constexpr int SAM3_VERSION = 1;
+static constexpr int SAM3_VERSION = 2;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Internal data types — hyperparameters
@@ -84,6 +84,8 @@ struct sam3_hparams {
     int32_t max_obj_ptrs = 16;
 
     int32_t n_amb_experts = 2;
+
+    int32_t visual_only = 0;  // 1 = no text encoder / detector path
 
     // derived helpers
     int32_t n_img_embd() const { return img_size / patch_size; }            // 72
@@ -1215,7 +1217,7 @@ static std::vector<int32_t> sam3_tokenize(sam3_bpe_tokenizer& tok,
 //  Model loading — internal helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
-static bool sam3_load_hparams(std::ifstream& fin, sam3_hparams& hp) {
+static bool sam3_load_hparams(std::ifstream& fin, sam3_hparams& hp, int version) {
     auto rd = [&](int32_t& v) { fin.read(reinterpret_cast<char*>(&v), 4); };
     rd(hp.img_size);
     rd(hp.patch_size);
@@ -1256,6 +1258,9 @@ static bool sam3_load_hparams(std::ifstream& fin, sam3_hparams& hp) {
     rd(hp.num_maskmem);
     rd(hp.max_obj_ptrs);
     rd(hp.n_amb_experts);
+    if (version >= 2) {
+        rd(hp.visual_only);
+    }
     return !fin.fail();
 }
 
@@ -1276,6 +1281,7 @@ static void sam3_print_hparams(const sam3_hparams& hp) {
     fprintf(stderr, "  sam_embed_dim  = %d\n", hp.sam_embed_dim);
     fprintf(stderr, "  mem_attn_lyrs  = %d\n", hp.mem_attn_layers);
     fprintf(stderr, "  num_maskmem    = %d\n", hp.num_maskmem);
+    fprintf(stderr, "  visual_only    = %d\n", hp.visual_only);
 }
 
 // Register all tensor names in the model struct so we can look them up by name
@@ -1417,8 +1423,35 @@ static void sam3_register_tensors(sam3_model& model) {
         neck.scales[3].conv3x3_w = T4(prefix + "3.conv_3x3.weight", 3, 3, D, D);
         neck.scales[3].conv3x3_b = T1f(prefix + "3.conv_3x3.bias", D);
     };
-    register_neck(model.neck_det, "neck.det.");
+    if (!hp.visual_only) {
+        register_neck(model.neck_det, "neck.det.");
+    }
     register_neck(model.neck_trk, "neck.trk.");
+
+    // Helper lambdas used by multiple sections (detector + tracker)
+    auto reg = [&](const std::string& n, int64_t d0, int64_t d1, bool is_f32 = false) {
+        const ggml_type rtype = (is_f32 || d0 % WBLK != 0) ? GGML_TYPE_F32 : WTYPE;
+        auto* t = ggml_new_tensor_2d(ctx, rtype, d0, d1);
+        ggml_set_name(t, n.c_str());
+        tensors[n] = t;
+        return t;
+    };
+    auto reg1 = [&](const std::string& n, int64_t d0) {
+        auto* t = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, d0);
+        ggml_set_name(t, n.c_str());
+        tensors[n] = t;
+        return t;
+    };
+    auto reg4 = [&](const std::string& n, int64_t d0, int64_t d1, int64_t d2, int64_t d3) {
+        const ggml_type rtype = (d0 % WBLK == 0) ? WTYPE : GGML_TYPE_F32;
+        auto* t = ggml_new_tensor_4d(ctx, rtype, d0, d1, d2, d3);
+        ggml_set_name(t, n.c_str());
+        tensors[n] = t;
+        return t;
+    };
+
+    // ── Detector-only tensors (skipped for visual-only models) ──────────
+    if (!hp.visual_only) {
 
     // ── Text encoder ─────────────────────────────────────────────────────
     model.text_enc.blocks.resize(hp.text_layers);
@@ -1573,27 +1606,6 @@ static void sam3_register_tensors(sam3_model& model) {
     }
 
     // ── DotProductScoring ────────────────────────────────────────────────
-    auto reg = [&](const std::string& n, int64_t d0, int64_t d1, bool is_f32 = false) {
-        const ggml_type rtype = (is_f32 || d0 % WBLK != 0) ? GGML_TYPE_F32 : WTYPE;
-        auto* t = ggml_new_tensor_2d(ctx, rtype, d0, d1);
-        ggml_set_name(t, n.c_str());
-        tensors[n] = t;
-        return t;
-    };
-    auto reg1 = [&](const std::string& n, int64_t d0) {
-        auto* t = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, d0);
-        ggml_set_name(t, n.c_str());
-        tensors[n] = t;
-        return t;
-    };
-    auto reg4 = [&](const std::string& n, int64_t d0, int64_t d1, int64_t d2, int64_t d3) {
-        const ggml_type rtype = (d0 % WBLK == 0) ? WTYPE : GGML_TYPE_F32;
-        auto* t = ggml_new_tensor_4d(ctx, rtype, d0, d1, d2, d3);
-        ggml_set_name(t, n.c_str());
-        tensors[n] = t;
-        return t;
-    };
-
     reg("scoring.prompt_proj.weight", D, D);
     reg1("scoring.prompt_proj.bias", D);
     reg("scoring.hs_proj.weight", D, D);
@@ -1695,6 +1707,8 @@ static void sam3_register_tensors(sam3_model& model) {
     reg1("seg.instance_seg_head.bias", D);
     reg4("seg.semantic_seg_head.weight", 1, 1, D, 1);
     reg1("seg.semantic_seg_head.bias", 1);
+
+    } // end if (!hp.visual_only) — detector-only tensors
 
     // ── SAM prompt encoder ───────────────────────────────────────────────
     model.sam_pe.pe_gaussian = T2f("sam_pe.pe_gaussian", 2, 128);
@@ -2040,8 +2054,8 @@ std::shared_ptr<sam3_model> sam3_load_model(const sam3_params& params) {
                 __func__, magic, SAM3_MAGIC);
         return nullptr;
     }
-    if (version != SAM3_VERSION) {
-        fprintf(stderr, "%s: unsupported version: %d (expected %d)\n",
+    if (version < 1 || version > SAM3_VERSION) {
+        fprintf(stderr, "%s: unsupported version: %d (expected 1..%d)\n",
                 __func__, version, SAM3_VERSION);
         return nullptr;
     }
@@ -2065,7 +2079,7 @@ std::shared_ptr<sam3_model> sam3_load_model(const sam3_params& params) {
     }
 
     // ── Read hyperparameters ─────────────────────────────────────────────
-    if (!sam3_load_hparams(fin, model->hparams)) {
+    if (!sam3_load_hparams(fin, model->hparams, version)) {
         fprintf(stderr, "%s: failed to read hyperparameters\n", __func__);
         return nullptr;
     }
@@ -2121,7 +2135,7 @@ std::shared_ptr<sam3_model> sam3_load_model(const sam3_params& params) {
     }
 
     // ── Load BPE tokenizer ───────────────────────────────────────────────
-    {
+    if (!model->hparams.visual_only) {
         std::string tok_dir = params.tokenizer_dir;
         if (tok_dir.empty()) {
             // Default: same directory as the model file
@@ -2136,6 +2150,8 @@ std::shared_ptr<sam3_model> sam3_load_model(const sam3_params& params) {
                     "(text prompts will not work)\n",
                     __func__, tok_dir.c_str());
         }
+    } else {
+        fprintf(stderr, "%s: visual-only model — skipping tokenizer\n", __func__);
     }
 
     fprintf(stderr, "%s: model loaded successfully\n", __func__);
@@ -2155,6 +2171,10 @@ void sam3_free_model(sam3_model& model) {
         ggml_backend_free(model.backend);
         model.backend = nullptr;
     }
+}
+
+bool sam3_is_visual_only(const sam3_model& model) {
+    return model.hparams.visual_only != 0;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2905,16 +2925,20 @@ bool sam3_encode_image(sam3_state& state,
     ggml_set_output(vit_out);
 
     // Build neck graphs (detector and tracker paths)
-    struct ggml_tensor* neck_det_out[4];
+    struct ggml_tensor* neck_det_out[4] = {};
     struct ggml_tensor* neck_trk_out[4];
-    sam3_build_neck_graph(ctx0, vit_out, model.neck_det, neck_det_out);
+    if (!model.hparams.visual_only) {
+        sam3_build_neck_graph(ctx0, vit_out, model.neck_det, neck_det_out);
+    }
     sam3_build_neck_graph(ctx0, vit_out, model.neck_trk, neck_trk_out);
 
     for (int i = 0; i < 4; ++i) {
         char name[64];
-        snprintf(name, sizeof(name), "neck_det_%d", i);
-        ggml_set_name(neck_det_out[i], name);
-        ggml_set_output(neck_det_out[i]);
+        if (!model.hparams.visual_only) {
+            snprintf(name, sizeof(name), "neck_det_%d", i);
+            ggml_set_name(neck_det_out[i], name);
+            ggml_set_output(neck_det_out[i]);
+        }
         snprintf(name, sizeof(name), "neck_trk_%d", i);
         ggml_set_name(neck_trk_out[i], name);
         ggml_set_output(neck_trk_out[i]);
@@ -2923,7 +2947,9 @@ bool sam3_encode_image(sam3_state& state,
     // Build computation graph
     struct ggml_cgraph* graph = ggml_new_graph_custom(ctx0, 16384, false);
     for (int i = 0; i < 4; ++i) {
-        ggml_build_forward_expand(graph, neck_det_out[i]);
+        if (!model.hparams.visual_only) {
+            ggml_build_forward_expand(graph, neck_det_out[i]);
+        }
         ggml_build_forward_expand(graph, neck_trk_out[i]);
     }
 
@@ -2977,7 +3003,7 @@ bool sam3_encode_image(sam3_state& state,
 
     // Store neck outputs
     for (int i = 0; i < 4; ++i) {
-        state.neck_det[i] = neck_det_out[i];
+        state.neck_det[i] = model.hparams.visual_only ? nullptr : neck_det_out[i];
         state.neck_trk[i] = neck_trk_out[i];
     }
 
@@ -3115,16 +3141,20 @@ bool sam3_encode_image_from_preprocessed(sam3_state& state,
         }
     }
 
-    struct ggml_tensor* neck_det_out[4];
+    struct ggml_tensor* neck_det_out[4] = {};
     struct ggml_tensor* neck_trk_out[4];
-    sam3_build_neck_graph(ctx0, vit_out, model.neck_det, neck_det_out);
+    if (!model.hparams.visual_only) {
+        sam3_build_neck_graph(ctx0, vit_out, model.neck_det, neck_det_out);
+    }
     sam3_build_neck_graph(ctx0, vit_out, model.neck_trk, neck_trk_out);
 
     for (int i = 0; i < 4; ++i) {
         char name[64];
-        snprintf(name, sizeof(name), "neck_det_%d", i);
-        ggml_set_name(neck_det_out[i], name);
-        ggml_set_output(neck_det_out[i]);
+        if (!model.hparams.visual_only) {
+            snprintf(name, sizeof(name), "neck_det_%d", i);
+            ggml_set_name(neck_det_out[i], name);
+            ggml_set_output(neck_det_out[i]);
+        }
         snprintf(name, sizeof(name), "neck_trk_%d", i);
         ggml_set_name(neck_trk_out[i], name);
         ggml_set_output(neck_trk_out[i]);
@@ -3132,7 +3162,9 @@ bool sam3_encode_image_from_preprocessed(sam3_state& state,
 
     struct ggml_cgraph* graph = ggml_new_graph_custom(ctx0, 16384, false);
     for (int i = 0; i < 4; ++i) {
-        ggml_build_forward_expand(graph, neck_det_out[i]);
+        if (!model.hparams.visual_only) {
+            ggml_build_forward_expand(graph, neck_det_out[i]);
+        }
         ggml_build_forward_expand(graph, neck_trk_out[i]);
     }
 
@@ -3176,7 +3208,7 @@ bool sam3_encode_image_from_preprocessed(sam3_state& state,
     state.vit_output = vit_out;
 
     for (int i = 0; i < 4; ++i) {
-        state.neck_det[i] = neck_det_out[i];
+        state.neck_det[i] = model.hparams.visual_only ? nullptr : neck_det_out[i];
         state.neck_trk[i] = neck_trk_out[i];
     }
 
@@ -5440,6 +5472,11 @@ static void sam3_sine_pos_embed_boxes(float* out, const float* boxes, int NQ, in
 sam3_result sam3_segment_pcs(sam3_state& state,
                              const sam3_model& model,
                              const sam3_pcs_params& params) {
+    if (model.hparams.visual_only) {
+        fprintf(stderr, "%s: ERROR: PCS not available on visual-only model\n", __func__);
+        return sam3_result{};
+    }
+
     auto t_start = std::chrono::high_resolution_clock::now();
     const auto& hp = model.hparams;
     const int D = hp.neck_dim;           // 256
@@ -7209,6 +7246,12 @@ sam3_tracker_ptr sam3_create_tracker(const sam3_model& model,
 
 sam3_result sam3_track_frame(sam3_tracker& tracker, sam3_state& state,
                              const sam3_model& model, const sam3_image& frame) {
+    if (model.hparams.visual_only) {
+        fprintf(stderr, "%s: ERROR: track_frame not available on visual-only model "
+                "(use sam3_propagate_frame instead)\n", __func__);
+        return sam3_result{};
+    }
+
     sam3_result result;
     const int D = model.hparams.neck_dim;
     if (!sam3_encode_image(state, model, frame)) return result;
@@ -7550,6 +7593,156 @@ void sam3_tracker_reset(sam3_tracker& tracker) {
         ggml_backend_buffer_free(tracker.buffer);
         tracker.buffer = nullptr;
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Visual-only video tracking
+// ═══════════════════════════════════════════════════════════════════════════════
+
+sam3_tracker_ptr sam3_create_visual_tracker(
+        const sam3_model& model,
+        const sam3_visual_track_params& params) {
+    sam3_video_params vp;
+    vp.text_prompt          = "";  // no PCS detection
+    vp.assoc_iou_threshold  = params.assoc_iou_threshold;
+    vp.max_keep_alive       = params.max_keep_alive;
+    vp.recondition_every    = params.recondition_every;
+    vp.fill_hole_area       = params.fill_hole_area;
+    sam3_tracker_ptr tracker(new sam3_tracker());
+    tracker->params = vp;
+    fprintf(stderr, "%s: visual-only tracker created (max_keep_alive=%d)\n",
+            __func__, params.max_keep_alive);
+    return tracker;
+}
+
+sam3_result sam3_propagate_frame(
+        sam3_tracker& tracker, sam3_state& state,
+        const sam3_model& model, const sam3_image& frame) {
+    sam3_result result;
+    const int D = model.hparams.neck_dim;
+    if (!sam3_encode_image(state, model, frame)) return result;
+    int fi = tracker.frame_index;
+    fprintf(stderr, "%s: frame %d (%zu active + %zu pending)\n",
+            __func__, fi, tracker.masklets.size(), tracker.pending.size());
+
+    // ── Propagate active masklets ────────────────────────────────────────
+    std::map<int, sam3_mask> pm;
+    std::map<int, sam3_prop_output> po;
+    for (auto& ml : tracker.masklets) {
+        int id = ml.instance_id;
+        auto im = tracker.mem_banks.find(id);
+        if (im == tracker.mem_banks.end() || im->second.empty()) continue;
+        po[id] = sam3_propagate_single(state, model, ml, im->second, tracker.ptr_banks[id]);
+        if (po[id].mask_logits.empty()) continue;
+        auto rs = sam3_bilinear_interpolate(po[id].mask_logits.data(),
+                                            po[id].mask_w, po[id].mask_h,
+                                            state.orig_width, state.orig_height);
+        pm[id].width = state.orig_width;
+        pm[id].height = state.orig_height;
+        pm[id].data.resize(state.orig_width * state.orig_height);
+        int fg = 0;
+        for (int p = 0; p < (int)rs.size(); ++p) {
+            bool f = rs[p] > 0.0f;
+            pm[id].data[p] = f ? 255 : 0;
+            if (f) fg++;
+        }
+        ml.last_score = po[id].iou_scores[0];
+        ml.last_seen = fi;
+        float cov = (float)fg / (state.orig_width * state.orig_height);
+        ml.mds_sum += (cov > 0.001f && po[id].obj_score > 0.0f) ? 1 : -1;
+    }
+
+    // ── Propagate pending masklets ───────────────────────────────────────
+    for (auto& ml : tracker.pending) {
+        int id = ml.instance_id;
+        auto im = tracker.mem_banks.find(id);
+        if (im == tracker.mem_banks.end() || im->second.empty()) continue;
+        auto p2 = sam3_propagate_single(state, model, ml, im->second, tracker.ptr_banks[id]);
+        if (!p2.mask_logits.empty()) {
+            ml.last_score = p2.iou_scores[0];
+            ml.last_seen = fi;
+            auto r2 = sam3_bilinear_interpolate(p2.mask_logits.data(),
+                                                p2.mask_w, p2.mask_h,
+                                                state.orig_width, state.orig_height);
+            int fg2 = 0;
+            for (auto v : r2)
+                if (v > 0.0f) fg2++;
+            float c2 = (float)fg2 / (state.orig_width * state.orig_height);
+            ml.mds_sum += (c2 > 0.001f && p2.obj_score > 0.0f) ? 1 : -1;
+            pm[id].width = state.orig_width;
+            pm[id].height = state.orig_height;
+            pm[id].data.resize(state.orig_width * state.orig_height);
+            for (int p = 0; p < (int)r2.size(); ++p)
+                pm[id].data[p] = r2[p] > 0.0f ? 255 : 0;
+            sam3_encode_memory(tracker, state, model, id,
+                               p2.mask_logits.data(), p2.mask_h, p2.mask_w,
+                               fi, false, p2.obj_score);
+            std::vector<float> op(D);
+            sam3_extract_obj_ptr_cpu(model, p2.sam_token.data(), p2.obj_score, op.data());
+            sam3_store_obj_ptr(tracker, model, id, op.data(), fi);
+        }
+    }
+
+    // ── Encode memory for active masklets ────────────────────────────────
+    for (auto& ml : tracker.masklets) {
+        int id = ml.instance_id;
+        auto it = po.find(id);
+        if (it == po.end() || it->second.mask_logits.empty()) continue;
+        sam3_encode_memory(tracker, state, model, id,
+                           it->second.mask_logits.data(), it->second.mask_h,
+                           it->second.mask_w, fi, false, it->second.obj_score);
+        std::vector<float> op(D);
+        sam3_extract_obj_ptr_cpu(model, it->second.sam_token.data(),
+                                 it->second.obj_score, op.data());
+        sam3_store_obj_ptr(tracker, model, id, op.data(), fi);
+    }
+
+    // ── Update tracker state (confirmation / eviction) ───────────────────
+    sam3_update_tracker(tracker, fi);
+
+    // ── Build result ─────────────────────────────────────────────────────
+    auto add_mask_to_result = [&](int inst_id, float score, const sam3_mask& mask) {
+        if (mask.data.empty()) return;
+        sam3_detection det;
+        det.instance_id = inst_id;
+        det.score = score;
+        det.mask = mask;
+        det.mask.instance_id = inst_id;
+        det.mask.iou_score = score;
+        float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+        for (int p = 0; p < (int)det.mask.data.size(); ++p)
+            if (det.mask.data[p] > 127) {
+                int x = p % det.mask.width, y = p / det.mask.width;
+                x0 = std::min(x0, (float)x);
+                y0 = std::min(y0, (float)y);
+                x1 = std::max(x1, (float)x);
+                y1 = std::max(y1, (float)y);
+            }
+        if (x0 <= x1) det.box = {x0, y0, x1, y1};
+        result.detections.push_back(std::move(det));
+    };
+
+    for (auto& ml : tracker.masklets) {
+        auto it = pm.find(ml.instance_id);
+        if (it != pm.end()) add_mask_to_result(ml.instance_id, ml.last_score, it->second);
+    }
+    for (auto& ml : tracker.pending) {
+        auto it = pm.find(ml.instance_id);
+        if (it != pm.end()) add_mask_to_result(ml.instance_id, ml.last_score, it->second);
+    }
+
+    sam3_resolve_overlaps(result.detections);
+    for (auto& d : result.detections) {
+        if (d.mask.data.empty()) continue;
+        sam3_fill_holes(d.mask.data.data(), d.mask.width, d.mask.height,
+                        tracker.params.fill_hole_area);
+        sam3_remove_sprinkles(d.mask.data.data(), d.mask.width, d.mask.height,
+                              tracker.params.fill_hole_area);
+    }
+    tracker.frame_index++;
+    fprintf(stderr, "%s: frame %d done — %zu tracked\n",
+            __func__, fi, result.detections.size());
+    return result;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

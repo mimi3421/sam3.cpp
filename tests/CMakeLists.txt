@@ -70,3 +70,21 @@ target_link_libraries(test_metal_vit PRIVATE sam3)
 add_executable(test_metal_conv_dw test_metal_conv_dw.cpp)
 target_link_libraries(test_metal_conv_dw PRIVATE sam3)
 
+add_executable(test_metal_profile test_metal_profile.cpp)
+target_link_libraries(test_metal_profile PRIVATE sam3)
+
+add_executable(test_metal_overhead test_metal_overhead.cpp)
+target_link_libraries(test_metal_overhead PRIVATE sam3)
+
+add_executable(test_v_cont_removal test_v_cont_removal.cpp)
+target_link_libraries(test_v_cont_removal PRIVATE sam3)
+
+add_executable(test_metal_real_profile test_metal_real_profile.cpp)
+target_link_libraries(test_metal_real_profile PRIVATE sam3)
+
+add_executable(test_visual_only test_visual_only.cpp)
+target_link_libraries(test_visual_only PRIVATE sam3)
+
+add_executable(test_visual_only_compare test_visual_only_compare.cpp)
+target_link_libraries(test_visual_only_compare PRIVATE sam3)
+

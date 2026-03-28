@@ -17,7 +17,7 @@ import numpy as np
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 MAGIC   = 0x73616D33   # "sam3"
-VERSION = 1
+VERSION = 2
 FTYPE_F32 = 0
 FTYPE_F16 = 1
 
@@ -62,7 +62,20 @@ HPARAMS_FIELDS = [
     ("num_maskmem",              7),
     ("max_obj_ptrs",            16),
     ("n_amb_experts",            2),
+    ("visual_only",              0),
 ]
+
+# Tensor prefixes that belong exclusively to the detector path.
+# When --visual-only is set, tensors whose renamed key starts with any of
+# these prefixes are stripped from the output file.
+VISUAL_ONLY_STRIP_PREFIXES = (
+    "text.", "fenc.", "ddec.", "seg.", "geom.", "scoring.", "neck.det.",
+)
+
+# Tensor prefixes that MUST be present in a visual-only model.
+VISUAL_ONLY_REQUIRED_PREFIXES = (
+    "vit.", "neck.trk.", "sam_pe.", "sam_dec.", "mem_enc.", "mem_attn.", "obj_ptr_proj.",
+)
 
 
 # ── Key renaming ──────────────────────────────────────────────────────────────
@@ -185,13 +198,15 @@ def rename_key(k: str) -> str | None:
 
 # ── I/O helpers ───────────────────────────────────────────────────────────────
 
-def write_header(fout, ftype: int, n_tensors: int):
+def write_header(fout, ftype: int, n_tensors: int, visual_only: bool = False):
     """Write file header: magic, version, ftype, n_tensors, hparams."""
     fout.write(struct.pack("<I", MAGIC))
     fout.write(struct.pack("<i", VERSION))
     fout.write(struct.pack("<i", ftype))
     fout.write(struct.pack("<i", n_tensors))
-    for _, val in HPARAMS_FIELDS:
+    for name, val in HPARAMS_FIELDS:
+        if name == "visual_only" and visual_only:
+            val = 1
         fout.write(struct.pack("<i", val))
 
 
@@ -247,6 +262,8 @@ def main():
     parser.add_argument("--output", required=True, help="Output .ggml path")
     parser.add_argument("--ftype",  type=int, default=1, choices=[0, 1],
                         help="0=f32, 1=f16 (default)")
+    parser.add_argument("--visual-only", action="store_true",
+                        help="Strip text encoder and detector-only components")
     args = parser.parse_args()
 
     import torch
@@ -298,11 +315,30 @@ def main():
         for s in skipped[:10]:
             print(f"    {s}")
 
+    # ── Visual-only filtering ─────────────────────────────────────────────
+    if args.visual_only:
+        full_count = len(renamed)
+        stripped = {k: v for k, v in renamed.items()
+                    if k.startswith(VISUAL_ONLY_STRIP_PREFIXES)}
+        renamed = {k: v for k, v in renamed.items()
+                   if not k.startswith(VISUAL_ONLY_STRIP_PREFIXES)}
+        print(f"\n--visual-only: stripped {len(stripped)} detector tensors "
+              f"({full_count} → {len(renamed)})")
+        if stripped:
+            print("  First 10 stripped:")
+            for s in list(stripped.keys())[:10]:
+                print(f"    {s}")
+
+        # Validate required tracker prefixes
+        for pfx in VISUAL_ONLY_REQUIRED_PREFIXES:
+            if not any(k.startswith(pfx) for k in renamed):
+                print(f"  WARNING: no tensors with required prefix '{pfx}'")
+
     # ── Write ─────────────────────────────────────────────────────────────
     print(f"\nWriting {args.output} (ftype={args.ftype}) ...")
 
     with open(args.output, "wb") as fout:
-        write_header(fout, args.ftype, len(renamed))
+        write_header(fout, args.ftype, len(renamed), visual_only=args.visual_only)
 
         for i, (name, data) in enumerate(renamed.items()):
             write_tensor(fout, name, data, args.ftype)

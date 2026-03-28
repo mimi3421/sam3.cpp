@@ -109,6 +109,9 @@ struct sam3_video_info {
 std::shared_ptr<sam3_model> sam3_load_model(const sam3_params & params);
 void sam3_free_model(sam3_model & model);
 
+// Returns true if the model was loaded as visual-only (no text/detector path).
+bool sam3_is_visual_only(const sam3_model & model);
+
 // ─── Inference state ───
 
 sam3_state_ptr sam3_create_state(const sam3_model & model,
@@ -158,6 +161,30 @@ int sam3_tracker_add_instance(sam3_tracker         & tracker,
 
 int  sam3_tracker_frame_index(const sam3_tracker & tracker);
 void sam3_tracker_reset(sam3_tracker & tracker);
+
+// ─── Visual-only video tracking ───
+
+struct sam3_visual_track_params {
+    float assoc_iou_threshold = 0.1f;
+    int   max_keep_alive      = 30;
+    int   recondition_every   = 16;
+    int   fill_hole_area      = 16;
+};
+
+// Create a tracker for visual-only models. Instances are added manually
+// via sam3_tracker_add_instance().
+sam3_tracker_ptr sam3_create_visual_tracker(
+    const sam3_model               & model,
+    const sam3_visual_track_params & params);
+
+// Propagate all tracked instances to the next frame (no detection step).
+// The image is encoded, then each tracked instance is propagated via
+// memory attention + SAM mask decode, and the memory bank is updated.
+sam3_result sam3_propagate_frame(
+    sam3_tracker     & tracker,
+    sam3_state       & state,
+    const sam3_model & model,
+    const sam3_image & frame);
 
 // ─── Utility ───
 

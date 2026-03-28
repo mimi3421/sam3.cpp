@@ -13,7 +13,7 @@
 #include <vector>
 
 static constexpr uint32_t SAM3_MAGIC   = 0x73616D33;  // "sam3"
-static constexpr int      SAM3_VERSION = 1;
+static constexpr int      SAM3_VERSION = 2;
 
 static bool sam3_quantize_model(const std::string & fname_inp,
                                 const std::string & fname_out,
@@ -44,8 +44,8 @@ static bool sam3_quantize_model(const std::string & fname_inp,
                 __func__, magic, SAM3_MAGIC);
         return false;
     }
-    if (version != SAM3_VERSION) {
-        fprintf(stderr, "%s: unsupported version %d (expected %d)\n",
+    if (version < 1 || version > SAM3_VERSION) {
+        fprintf(stderr, "%s: unsupported version %d (expected 1..%d)\n",
                 __func__, version, SAM3_VERSION);
         return false;
     }
@@ -106,6 +106,9 @@ static bool sam3_quantize_model(const std::string & fname_inp,
     copy_i32();  // num_maskmem
     copy_i32();  // max_obj_ptrs
     copy_i32();  // n_amb_experts
+    if (version >= 2) {
+        copy_i32();  // visual_only
+    }
 
     if (finp.fail()) {
         fprintf(stderr, "%s: failed to read hparams\n", __func__);
