@@ -6,21 +6,20 @@
 #include <sys/stat.h>
 
 int main(int argc, char ** argv) {
-    if (argc < 4) {
-        fprintf(stderr, "Usage: %s <model_path> <tokenizer_dir> <output_dir>\n", argv[0]);
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <model_path> <output_dir>\n", argv[0]);
         return 1;
     }
 
     const std::string model_path = argv[1];
-    const std::string tokenizer_dir = argv[2];
-    const std::string output_dir = argv[3];
+    const std::string output_dir = argv[2];
 
     // Create output directory
     mkdir(output_dir.c_str(), 0755);
 
-    // Load tokenizer
-    if (!sam3_test_load_tokenizer(tokenizer_dir)) {
-        fprintf(stderr, "Failed to load tokenizer from %s\n", tokenizer_dir.c_str());
+    // Load tokenizer from embedded data in model file
+    if (!sam3_test_load_tokenizer(model_path)) {
+        fprintf(stderr, "Failed to load tokenizer from %s\n", model_path.c_str());
         return 1;
     }
 
@@ -37,7 +36,6 @@ int main(int argc, char ** argv) {
     // Load model
     sam3_params params;
     params.model_path = model_path;
-    params.tokenizer_dir = tokenizer_dir;
     params.n_threads = 1;
     params.use_gpu = false;
 

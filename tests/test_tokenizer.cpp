@@ -30,8 +30,7 @@ static const int N_CASES = sizeof(CASES) / sizeof(CASES[0]);
 
 int main(int argc, char ** argv) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s <tokenizer_dir>\n", argv[0]);
-        fprintf(stderr, "  tokenizer_dir: directory containing vocab.json and merges.txt\n");
+        fprintf(stderr, "Usage: %s <model.ggml>\n", argv[0]);
         return 1;
     }
 

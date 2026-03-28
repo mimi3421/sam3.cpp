@@ -148,15 +148,14 @@ static void update_summary(summary_row & row,
 }
 
 int main(int argc, char ** argv) {
-    if (argc < 5) {
-        fprintf(stderr, "Usage: %s <ref_dir> <model_path> <tokenizer_dir> <prompts_tsv>\n", argv[0]);
+    if (argc < 4) {
+        fprintf(stderr, "Usage: %s <ref_dir> <model_path> <prompts_tsv>\n", argv[0]);
         return 1;
     }
 
     const std::string ref_dir = argv[1];
     const std::string model_path = argv[2];
-    const std::string tokenizer_dir = argv[3];
-    const std::string prompts_path = argv[4];
+    const std::string prompts_path = argv[3];
     const float atol = 1e-4f;
 
     auto prompts = load_prompt_cases(prompts_path);
@@ -165,14 +164,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (!sam3_test_load_tokenizer(tokenizer_dir)) {
-        fprintf(stderr, "Failed to load tokenizer from %s\n", tokenizer_dir.c_str());
+    if (!sam3_test_load_tokenizer(model_path)) {
+        fprintf(stderr, "Failed to load tokenizer from %s\n", model_path.c_str());
         return 1;
     }
 
     sam3_params params;
     params.model_path = model_path;
-    params.tokenizer_dir = tokenizer_dir;
     params.n_threads = 1;
     params.use_gpu = false;
 

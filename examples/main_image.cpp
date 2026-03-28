@@ -1,6 +1,6 @@
 // sam3_image — Interactive image segmentation example
 //
-// Usage: sam3_image --model <path.ggml> [--tokenizer <dir>] [--image <path>]
+// Usage: sam3_image --model <path.ggml> [--image <path>]
 //                   [--threads N] [--no-gpu]
 //
 // Controls:
@@ -300,8 +300,6 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--model") == 0 && i+1 < argc) {
             app.params.model_path = argv[++i];
-        } else if (strcmp(argv[i], "--tokenizer") == 0 && i+1 < argc) {
-            app.params.tokenizer_dir = argv[++i];
         } else if (strcmp(argv[i], "--image") == 0 && i+1 < argc) {
             image_path = argv[++i];
         } else if (strcmp(argv[i], "--threads") == 0 && i+1 < argc) {
@@ -310,7 +308,7 @@ int main(int argc, char** argv) {
             app.params.use_gpu = false;
         } else if (strcmp(argv[i], "--help") == 0) {
             fprintf(stderr,
-                "Usage: %s --model <path.ggml> [--tokenizer <dir>] [--image <path>]\n"
+                "Usage: %s --model <path.ggml> [--image <path>]\n"
                 "          [--threads N] [--no-gpu]\n", argv[0]);
             return 0;
         }

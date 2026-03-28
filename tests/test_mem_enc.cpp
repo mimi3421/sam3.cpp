@@ -3,7 +3,7 @@
  * Encodes the llama image, runs PVS with a point, then dumps the
  * memory encoder outputs for comparison against Python reference.
  *
- * Usage: test_mem_enc <model.ggml> <tokenizer_dir> <ref_dir> [x y]
+ * Usage: test_mem_enc <model.ggml> <ref_dir> [x y]
  */
 #include "sam3.h"
 #include "test_utils.h"
@@ -11,20 +11,18 @@
 #include <string>
 
 int main(int argc, char ** argv) {
-    if (argc < 4) {
-        fprintf(stderr, "Usage: %s <model.ggml> <tokenizer_dir> <ref_dir> [x y]\n", argv[0]);
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <model.ggml> <ref_dir> [x y]\n", argv[0]);
         return 1;
     }
 
     const std::string model_path = argv[1];
-    const std::string tokenizer_dir = argv[2];
-    const std::string ref_dir = std::string(argv[3]) + "/video_ref";
-    float px = argc > 5 ? atof(argv[4]) : 315.0f;
-    float py = argc > 5 ? atof(argv[5]) : 250.0f;
+    const std::string ref_dir = std::string(argv[2]) + "/video_ref";
+    float px = argc > 4 ? atof(argv[3]) : 315.0f;
+    float py = argc > 4 ? atof(argv[4]) : 250.0f;
 
     sam3_params params;
     params.model_path = model_path;
-    params.tokenizer_dir = tokenizer_dir;
     params.use_gpu = false;
     params.n_threads = 4;
 

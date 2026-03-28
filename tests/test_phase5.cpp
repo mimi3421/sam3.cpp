@@ -107,15 +107,14 @@ static float tolerance_for(const std::string & name) {
 }
 
 int main(int argc, char ** argv) {
-    if (argc < 5) {
-        fprintf(stderr, "Usage: %s <ref_dir> <model_path> <tokenizer_dir> <image_path>\n", argv[0]);
+    if (argc < 4) {
+        fprintf(stderr, "Usage: %s <ref_dir> <model_path> <image_path>\n", argv[0]);
         return 1;
     }
 
     const std::string ref_dir = argv[1];
     const std::string model_path = argv[2];
-    const std::string tokenizer_dir = argv[3];
-    const std::string image_path = argv[4];
+    const std::string image_path = argv[3];
     const std::string cpp_dir = ref_dir + "/cpp_out_phase5";
     if (!ensure_dir(cpp_dir)) {
         fprintf(stderr, "Failed to create %s\n", cpp_dir.c_str());
@@ -129,8 +128,8 @@ int main(int argc, char ** argv) {
 
     auto ref_token_ids = load_ref_i32(ref_dir + "/token_ids");
 
-    if (!sam3_test_load_tokenizer(tokenizer_dir)) {
-        fprintf(stderr, "Failed to load tokenizer from %s\n", tokenizer_dir.c_str());
+    if (!sam3_test_load_tokenizer(model_path)) {
+        fprintf(stderr, "Failed to load tokenizer from %s\n", model_path.c_str());
         return 1;
     }
 
@@ -155,7 +154,6 @@ int main(int argc, char ** argv) {
 
     sam3_params params;
     params.model_path = model_path;
-    params.tokenizer_dir = tokenizer_dir;
     params.n_threads = 1;
     params.use_gpu = false;
 

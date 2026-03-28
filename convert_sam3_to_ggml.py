@@ -2,9 +2,10 @@
 """Convert SAM 3 PyTorch checkpoint to ggml binary format.
 
 Usage:
-    python convert_sam3_to_ggml.py --model sam3.pt --output sam3.ggml [--ftype 1]
+    python convert_sam3_to_ggml.py --model sam3.pt --output sam3.ggml [--ftype 1] [--tokenizer <dir>]
 
 ftype: 0 = float32, 1 = float16 (default)
+The tokenizer (vocab.json + merges.txt) is embedded in the output file.
 """
 
 import argparse
@@ -17,7 +18,7 @@ import numpy as np
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 MAGIC   = 0x73616D33   # "sam3"
-VERSION = 2
+VERSION = 3
 FTYPE_F32 = 0
 FTYPE_F16 = 1
 
@@ -254,6 +255,54 @@ def write_tensor(fout, name: str, data: np.ndarray, ftype: int):
     fout.write(data.tobytes())
 
 
+# ── Tokenizer embedding ──────────────────────────────────────────────────────
+
+TOK_MAGIC = 0x746F6B00   # "tok\0"
+
+def write_tokenizer(fout, tokenizer_dir: str):
+    """Embed BPE tokenizer (vocab + merges) into the model file."""
+    import json
+
+    vocab_path  = os.path.join(tokenizer_dir, "vocab.json")
+    merges_path = os.path.join(tokenizer_dir, "merges.txt")
+
+    with open(vocab_path, "r", encoding="utf-8") as f:
+        vocab = json.load(f)
+
+    merges = []
+    with open(merges_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if line.startswith("#") or not line:
+                continue
+            parts = line.split(" ", 1)
+            if len(parts) == 2:
+                merges.append((parts[0], parts[1]))
+
+    # Sentinel
+    fout.write(struct.pack("<I", TOK_MAGIC))
+
+    # Vocab (sorted by token_id for determinism)
+    fout.write(struct.pack("<i", len(vocab)))
+    for token_str, token_id in sorted(vocab.items(), key=lambda x: x[1]):
+        token_bytes = token_str.encode("utf-8")
+        fout.write(struct.pack("<i", len(token_bytes)))
+        fout.write(token_bytes)
+        fout.write(struct.pack("<i", token_id))
+
+    # Merges
+    fout.write(struct.pack("<i", len(merges)))
+    for a, b in merges:
+        a_bytes = a.encode("utf-8")
+        b_bytes = b.encode("utf-8")
+        fout.write(struct.pack("<i", len(a_bytes)))
+        fout.write(a_bytes)
+        fout.write(struct.pack("<i", len(b_bytes)))
+        fout.write(b_bytes)
+
+    print(f"Embedded tokenizer: {len(vocab)} vocab entries, {len(merges)} merges")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -264,6 +313,9 @@ def main():
                         help="0=f32, 1=f16 (default)")
     parser.add_argument("--visual-only", action="store_true",
                         help="Strip text encoder and detector-only components")
+    parser.add_argument("--tokenizer", default=None,
+                        help="Directory containing vocab.json + merges.txt "
+                             "(default: same directory as --model)")
     args = parser.parse_args()
 
     import torch
@@ -344,6 +396,11 @@ def main():
             write_tensor(fout, name, data, args.ftype)
             if (i + 1) % 100 == 0 or i == len(renamed) - 1:
                 print(f"  [{i+1}/{len(renamed)}] {name}  {list(data.shape)}")
+
+        # Embed tokenizer for non-visual-only models
+        if not args.visual_only:
+            tok_dir = args.tokenizer if args.tokenizer else os.path.dirname(os.path.abspath(args.model))
+            write_tokenizer(fout, tok_dir)
 
     file_size = os.path.getsize(args.output)
     print(f"\nDone. {len(renamed)} tensors, {file_size / 1e9:.2f} GB")

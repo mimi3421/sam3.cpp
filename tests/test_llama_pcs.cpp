@@ -7,19 +7,17 @@
 #include <string>
 
 int main(int argc, char ** argv) {
-    if (argc < 4) {
-        fprintf(stderr, "Usage: %s <model.ggml> <tokenizer_dir> <image.jpg> [prompt]\n", argv[0]);
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <model.ggml> <image.jpg> [prompt]\n", argv[0]);
         return 1;
     }
 
     const std::string model_path = argv[1];
-    const std::string tokenizer_dir = argv[2];
-    const std::string image_path = argv[3];
-    const std::string prompt = argc > 4 ? argv[4] : "llama";
+    const std::string image_path = argv[2];
+    const std::string prompt = argc > 3 ? argv[3] : "llama";
 
     sam3_params params;
     params.model_path = model_path;
-    params.tokenizer_dir = tokenizer_dir;
     params.use_gpu = false;
     params.n_threads = 4;
 

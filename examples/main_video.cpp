@@ -1,6 +1,6 @@
 // sam3_video — Interactive video segmentation + tracking example
 //
-// Usage: sam3_video --model <path.ggml> --video <path> [--tokenizer <dir>]
+// Usage: sam3_video --model <path.ggml> --video <path>
 //
 // Controls:
 //   Mode selector chooses how to initialize tracking instances:
@@ -275,8 +275,6 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--model") == 0 && i+1 < argc) {
             app.params.model_path = argv[++i];
-        } else if (strcmp(argv[i], "--tokenizer") == 0 && i+1 < argc) {
-            app.params.tokenizer_dir = argv[++i];
         } else if (strcmp(argv[i], "--video") == 0 && i+1 < argc) {
             app.video_path = argv[++i];
         } else if (strcmp(argv[i], "--threads") == 0 && i+1 < argc) {
@@ -285,7 +283,7 @@ int main(int argc, char** argv) {
             app.params.use_gpu = false;
         } else if (strcmp(argv[i], "--help") == 0) {
             fprintf(stderr,
-                "Usage: %s --model <path.ggml> --video <path> [--tokenizer <dir>]\n"
+                "Usage: %s --model <path.ggml> --video <path>\n"
                 "          [--threads N] [--no-gpu]\n", argv[0]);
             return 0;
         }

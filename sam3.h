@@ -64,7 +64,6 @@ struct sam3_result {
 
 struct sam3_params {
     std::string model_path;
-    std::string tokenizer_dir;   // directory containing vocab.json + merges.txt
     int         n_threads = 4;
     bool        use_gpu   = true;
     int         seed      = 42;
@@ -193,9 +192,9 @@ bool            sam3_save_mask(const sam3_mask & mask, const std::string & path)
 sam3_image      sam3_decode_video_frame(const std::string & video_path, int frame_index);
 sam3_video_info sam3_get_video_info(const std::string & video_path);
 
-// ─── Tokenizer (standalone, does not require model weights) ───
+// ─── Tokenizer (standalone, loads embedded tokenizer from .ggml file) ───
 
-bool                  sam3_test_load_tokenizer(const std::string & dir);
+bool                  sam3_test_load_tokenizer(const std::string & model_path);
 std::vector<int32_t>  sam3_test_tokenize(const std::string & text);
 
 // Test-only: run the text encoder on fixed token IDs and dump standard

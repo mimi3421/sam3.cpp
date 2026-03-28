@@ -121,7 +121,6 @@ int main(int argc, char ** argv) {
     fprintf(stderr, "\n═══ Loading model ═══\n");
     sam3_params params;
     params.model_path = model_path;
-    params.tokenizer_dir = argc > 3 ? argv[3] : "../raw_weights";
     params.use_gpu = false;
     params.n_threads = 4;
 

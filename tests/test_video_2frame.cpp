@@ -3,27 +3,25 @@
  * Frame 0: encode image, add instance via point prompt
  * Frame 1: track (propagate mask to same image)
  *
- * Usage: test_video_2frame <model.ggml> <tokenizer_dir> <image.jpg> [x y]
+ * Usage: test_video_2frame <model.ggml> <image.jpg> [x y]
  */
 #include "sam3.h"
 #include <cstdio>
 #include <string>
 
 int main(int argc, char ** argv) {
-    if (argc < 4) {
-        fprintf(stderr, "Usage: %s <model.ggml> <tokenizer_dir> <image.jpg> [x y]\n", argv[0]);
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <model.ggml> <image.jpg> [x y]\n", argv[0]);
         return 1;
     }
 
     const std::string model_path = argv[1];
-    const std::string tokenizer_dir = argv[2];
-    const std::string image_path = argv[3];
-    float px = argc > 5 ? atof(argv[4]) : 315.0f;
-    float py = argc > 5 ? atof(argv[5]) : 250.0f;
+    const std::string image_path = argv[2];
+    float px = argc > 4 ? atof(argv[3]) : 315.0f;
+    float py = argc > 4 ? atof(argv[4]) : 250.0f;
 
     sam3_params params;
     params.model_path = model_path;
-    params.tokenizer_dir = tokenizer_dir;
     params.use_gpu = false;
     params.n_threads = 4;
 

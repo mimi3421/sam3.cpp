@@ -13,7 +13,7 @@
 #include <vector>
 
 static constexpr uint32_t SAM3_MAGIC   = 0x73616D33;  // "sam3"
-static constexpr int      SAM3_VERSION = 2;
+static constexpr int      SAM3_VERSION = 3;
 
 static bool sam3_quantize_model(const std::string & fname_inp,
                                 const std::string & fname_out,
@@ -44,8 +44,8 @@ static bool sam3_quantize_model(const std::string & fname_inp,
                 __func__, magic, SAM3_MAGIC);
         return false;
     }
-    if (version < 1 || version > SAM3_VERSION) {
-        fprintf(stderr, "%s: unsupported version %d (expected 1..%d)\n",
+    if (version != SAM3_VERSION) {
+        fprintf(stderr, "%s: unsupported version %d (expected %d)\n",
                 __func__, version, SAM3_VERSION);
         return false;
     }
@@ -106,9 +106,7 @@ static bool sam3_quantize_model(const std::string & fname_inp,
     copy_i32();  // num_maskmem
     copy_i32();  // max_obj_ptrs
     copy_i32();  // n_amb_experts
-    if (version >= 2) {
-        copy_i32();  // visual_only
-    }
+    copy_i32();  // visual_only
 
     if (finp.fail()) {
         fprintf(stderr, "%s: failed to read hparams\n", __func__);
@@ -128,7 +126,7 @@ static bool sam3_quantize_model(const std::string & fname_inp,
     std::vector<uint8_t>     work;
     std::vector<char>        data_raw;
 
-    while (finp.peek() != EOF) {
+    for (int t = 0; t < n_tensors; ++t) {
         int32_t n_dims, name_len, dtype;
         finp.read(reinterpret_cast<char *>(&n_dims),   4);
         finp.read(reinterpret_cast<char *>(&name_len), 4);
@@ -277,6 +275,17 @@ static bool sam3_quantize_model(const std::string & fname_inp,
 
         total_size_org += n_el * sizeof(float);
         n_total++;
+    }
+
+    // ── Copy remaining data (embedded tokenizer block) verbatim ───────────
+    {
+        char buf[4096];
+        while (finp.read(buf, sizeof(buf))) {
+            fout.write(buf, finp.gcount());
+        }
+        if (finp.gcount() > 0) {
+            fout.write(buf, finp.gcount());
+        }
     }
 
     printf("\n");

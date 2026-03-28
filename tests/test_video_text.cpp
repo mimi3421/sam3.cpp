@@ -1,26 +1,24 @@
 /**
  * Video tracking test with text prompt on first N frames.
- * Usage: test_video_text <model.ggml> <tokenizer_dir> <video.mp4> [prompt] [n_frames]
+ * Usage: test_video_text <model.ggml> <video.mp4> [prompt] [n_frames]
  */
 #include "sam3.h"
 #include <cstdio>
 #include <string>
 
 int main(int argc, char ** argv) {
-    if (argc < 4) {
-        fprintf(stderr, "Usage: %s <model.ggml> <tokenizer_dir> <video.mp4> [prompt] [n_frames]\n", argv[0]);
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <model.ggml> <video.mp4> [prompt] [n_frames]\n", argv[0]);
         return 1;
     }
 
     const std::string model_path = argv[1];
-    const std::string tokenizer_dir = argv[2];
-    const std::string video_path = argv[3];
-    const std::string prompt = argc > 4 ? argv[4] : "car";
-    const int n_frames = argc > 5 ? atoi(argv[5]) : 5;
+    const std::string video_path = argv[2];
+    const std::string prompt = argc > 3 ? argv[3] : "car";
+    const int n_frames = argc > 4 ? atoi(argv[4]) : 5;
 
     sam3_params params;
     params.model_path = model_path;
-    params.tokenizer_dir = tokenizer_dir;
     params.use_gpu = false;
     params.n_threads = 4;
 

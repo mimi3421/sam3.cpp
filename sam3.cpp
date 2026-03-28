@@ -33,8 +33,9 @@
 //  Constants
 // ═══════════════════════════════════════════════════════════════════════════════
 
-static constexpr uint32_t SAM3_MAGIC = 0x73616D33;  // "sam3"
-static constexpr int SAM3_VERSION = 2;
+static constexpr uint32_t SAM3_MAGIC     = 0x73616D33;  // "sam3"
+static constexpr uint32_t SAM3_TOK_MAGIC = 0x746F6B00;  // "tok\0"
+static constexpr int SAM3_VERSION = 3;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Internal data types — hyperparameters
@@ -793,176 +794,55 @@ static inline std::string sam3_merge_key(const std::string& a, const std::string
     return k;
 }
 
-// ── Minimal JSON parser for vocab.json ───────────────────────────────────────
+// ── Load embedded BPE tokenizer from binary stream ──────────────────────────
 
-// Parses a flat { "string": int, ... } JSON object.
-static bool sam3_parse_vocab_json(const std::string& path,
-                                  std::unordered_map<std::string, int>& encoder) {
-    std::ifstream f(path);
-    if (!f.is_open()) return false;
-
-    std::string content((std::istreambuf_iterator<char>(f)),
-                        std::istreambuf_iterator<char>());
-
-    size_t pos = 0;
-    // Skip to '{'
-    while (pos < content.size() && content[pos] != '{') pos++;
-    if (pos >= content.size()) return false;
-    pos++;
-
-    while (pos < content.size()) {
-        // Skip whitespace and commas
-        while (pos < content.size() &&
-               (content[pos] == ' ' || content[pos] == '\n' ||
-                content[pos] == '\r' || content[pos] == '\t' || content[pos] == ','))
-            pos++;
-
-        if (pos >= content.size() || content[pos] == '}') break;
-
-        // Expect '"'
-        if (content[pos] != '"') return false;
-        pos++;
-
-        // Read key (handle escape sequences)
-        std::string key;
-        while (pos < content.size() && content[pos] != '"') {
-            if (content[pos] == '\\') {
-                pos++;
-                if (pos >= content.size()) return false;
-                switch (content[pos]) {
-                    case '"':
-                        key += '"';
-                        break;
-                    case '\\':
-                        key += '\\';
-                        break;
-                    case '/':
-                        key += '/';
-                        break;
-                    case 'n':
-                        key += '\n';
-                        break;
-                    case 'r':
-                        key += '\r';
-                        break;
-                    case 't':
-                        key += '\t';
-                        break;
-                    case 'u': {
-                        // Parse 4-hex-digit unicode escape
-                        if (pos + 4 >= content.size()) return false;
-                        std::string hex = content.substr(pos + 1, 4);
-                        int cp = (int)strtol(hex.c_str(), nullptr, 16);
-                        key += sam3_codepoint_to_utf8(cp);
-                        pos += 4;
-                        break;
-                    }
-                    default:
-                        key += content[pos];
-                        break;
-                }
-            } else {
-                key += content[pos];
-            }
-            pos++;
-        }
-        if (pos >= content.size()) return false;
-        pos++;  // skip closing '"'
-
-        // Skip to ':'
-        while (pos < content.size() && content[pos] != ':') pos++;
-        if (pos >= content.size()) return false;
-        pos++;
-
-        // Skip whitespace
-        while (pos < content.size() &&
-               (content[pos] == ' ' || content[pos] == '\n' ||
-                content[pos] == '\r' || content[pos] == '\t'))
-            pos++;
-
-        // Read integer
-        bool negative = false;
-        if (pos < content.size() && content[pos] == '-') {
-            negative = true;
-            pos++;
-        }
-        int64_t val = 0;
-        while (pos < content.size() && content[pos] >= '0' && content[pos] <= '9') {
-            val = val * 10 + (content[pos] - '0');
-            pos++;
-        }
-        if (negative) val = -val;
-
-        encoder[key] = (int)val;
-    }
-
-    return !encoder.empty();
-}
-
-// ── Load merges.txt ──────────────────────────────────────────────────────────
-
-static bool sam3_load_merges(const std::string& path,
-                             std::vector<std::pair<std::string, std::string>>& merges,
-                             std::unordered_map<std::string, int>& merge_ranks) {
-    std::ifstream f(path);
-    if (!f.is_open()) return false;
-
-    std::string line;
-    // Skip header line (#version: ...)
-    if (!std::getline(f, line)) return false;
-    if (!line.empty() && line[0] != '#') {
-        // No header — this line IS a merge
-        size_t sp = line.find(' ');
-        if (sp != std::string::npos) {
-            std::string a = line.substr(0, sp);
-            std::string b = line.substr(sp + 1);
-            merge_ranks[sam3_merge_key(a, b)] = (int)merges.size();
-            merges.push_back({std::move(a), std::move(b)});
-        }
-    }
-
-    while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        size_t sp = line.find(' ');
-        if (sp == std::string::npos) continue;
-        std::string a = line.substr(0, sp);
-        std::string b = line.substr(sp + 1);
-        merge_ranks[sam3_merge_key(a, b)] = (int)merges.size();
-        merges.push_back({std::move(a), std::move(b)});
-    }
-
-    return !merges.empty();
-}
-
-// ── sam3_load_bpe_vocab ──────────────────────────────────────────────────────
-
-static bool sam3_load_bpe_vocab(sam3_bpe_tokenizer& tok, const std::string& dir) {
-    std::string sep(1, '/');
-    std::string vocab_path = dir + sep + "vocab.json";
-    std::string merges_path = dir + sep + "merges.txt";
-
-    // Load vocabulary
-    if (!sam3_parse_vocab_json(vocab_path, tok.encoder)) {
-        fprintf(stderr, "%s: failed to load vocab from '%s'\n", __func__, vocab_path.c_str());
+static bool sam3_load_bpe_vocab_from_stream(std::ifstream& fin, sam3_bpe_tokenizer& tok) {
+    uint32_t tok_magic;
+    fin.read(reinterpret_cast<char*>(&tok_magic), 4);
+    if (tok_magic != SAM3_TOK_MAGIC) {
+        fprintf(stderr, "%s: invalid tokenizer magic: 0x%08x (expected 0x%08x)\n",
+                __func__, tok_magic, SAM3_TOK_MAGIC);
         return false;
     }
 
-    // Build decoder (reverse map)
+    // Read vocab
+    int32_t n_vocab;
+    fin.read(reinterpret_cast<char*>(&n_vocab), 4);
+    tok.encoder.clear();
     tok.decoder.clear();
-    for (const auto& kv : tok.encoder) {
-        tok.decoder[kv.second] = kv.first;
+    for (int i = 0; i < n_vocab; ++i) {
+        int32_t token_len;
+        fin.read(reinterpret_cast<char*>(&token_len), 4);
+        std::string token(token_len, '\0');
+        fin.read(&token[0], token_len);
+        int32_t token_id;
+        fin.read(reinterpret_cast<char*>(&token_id), 4);
+        tok.encoder[token] = token_id;
+        tok.decoder[token_id] = token;
     }
 
-    // Load merges
-    if (!sam3_load_merges(merges_path, tok.merges, tok.merge_ranks)) {
-        fprintf(stderr, "%s: failed to load merges from '%s'\n", __func__, merges_path.c_str());
-        return false;
+    // Read merges
+    int32_t n_merges;
+    fin.read(reinterpret_cast<char*>(&n_merges), 4);
+    tok.merges.clear();
+    tok.merge_ranks.clear();
+    for (int i = 0; i < n_merges; ++i) {
+        int32_t len_a;
+        fin.read(reinterpret_cast<char*>(&len_a), 4);
+        std::string a(len_a, '\0');
+        fin.read(&a[0], len_a);
+        int32_t len_b;
+        fin.read(reinterpret_cast<char*>(&len_b), 4);
+        std::string b(len_b, '\0');
+        fin.read(&b[0], len_b);
+        tok.merge_ranks[sam3_merge_key(a, b)] = (int)tok.merges.size();
+        tok.merges.push_back({std::move(a), std::move(b)});
     }
 
-    // Init byte encoder
+    if (fin.fail()) return false;
+
+    // Init byte encoder and special tokens
     sam3_init_byte_encoder(tok.byte_encoder);
-
-    // Set special tokens
     tok.sot_token = 49406;
     tok.eot_token = 49407;
 
@@ -1217,7 +1097,7 @@ static std::vector<int32_t> sam3_tokenize(sam3_bpe_tokenizer& tok,
 //  Model loading — internal helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
-static bool sam3_load_hparams(std::ifstream& fin, sam3_hparams& hp, int version) {
+static bool sam3_load_hparams(std::ifstream& fin, sam3_hparams& hp) {
     auto rd = [&](int32_t& v) { fin.read(reinterpret_cast<char*>(&v), 4); };
     rd(hp.img_size);
     rd(hp.patch_size);
@@ -1258,9 +1138,7 @@ static bool sam3_load_hparams(std::ifstream& fin, sam3_hparams& hp, int version)
     rd(hp.num_maskmem);
     rd(hp.max_obj_ptrs);
     rd(hp.n_amb_experts);
-    if (version >= 2) {
-        rd(hp.visual_only);
-    }
+    rd(hp.visual_only);
     return !fin.fail();
 }
 
@@ -1922,9 +1800,9 @@ static void sam3_register_tensors(sam3_model& model) {
 }
 
 // Load tensors from the binary file into the already-registered ggml tensors
-static bool sam3_load_tensors(std::ifstream& fin, sam3_model& model) {
+static bool sam3_load_tensors(std::ifstream& fin, sam3_model& model, int n_tensors) {
     int n_loaded = 0;
-    while (fin.peek() != EOF) {
+    for (int t = 0; t < n_tensors; ++t) {
         int32_t n_dims, name_len, dtype;
         fin.read(reinterpret_cast<char*>(&n_dims), 4);
         fin.read(reinterpret_cast<char*>(&name_len), 4);
@@ -2054,8 +1932,8 @@ std::shared_ptr<sam3_model> sam3_load_model(const sam3_params& params) {
                 __func__, magic, SAM3_MAGIC);
         return nullptr;
     }
-    if (version < 1 || version > SAM3_VERSION) {
-        fprintf(stderr, "%s: unsupported version: %d (expected 1..%d)\n",
+    if (version != SAM3_VERSION) {
+        fprintf(stderr, "%s: unsupported version: %d (expected %d)\n",
                 __func__, version, SAM3_VERSION);
         return nullptr;
     }
@@ -2079,7 +1957,7 @@ std::shared_ptr<sam3_model> sam3_load_model(const sam3_params& params) {
     }
 
     // ── Read hyperparameters ─────────────────────────────────────────────
-    if (!sam3_load_hparams(fin, model->hparams, version)) {
+    if (!sam3_load_hparams(fin, model->hparams)) {
         fprintf(stderr, "%s: failed to read hyperparameters\n", __func__);
         return nullptr;
     }
@@ -2129,26 +2007,16 @@ std::shared_ptr<sam3_model> sam3_load_model(const sam3_params& params) {
             ggml_backend_buffer_get_size(model->buffer) / (1024.0 * 1024.0));
 
     // ── Load tensor data from file ───────────────────────────────────────
-    if (!sam3_load_tensors(fin, *model)) {
+    if (!sam3_load_tensors(fin, *model, n_tensors)) {
         fprintf(stderr, "%s: failed to load tensors\n", __func__);
         return nullptr;
     }
 
-    // ── Load BPE tokenizer ───────────────────────────────────────────────
+    // ── Load embedded BPE tokenizer ──────────────────────────────────────
     if (!model->hparams.visual_only) {
-        std::string tok_dir = params.tokenizer_dir;
-        if (tok_dir.empty()) {
-            // Default: same directory as the model file
-            auto slash = params.model_path.find_last_of("/\\");
-            tok_dir = (slash != std::string::npos)
-                          ? params.model_path.substr(0, slash)
-                          : ".";
-        }
-        if (!sam3_load_bpe_vocab(model->tokenizer, tok_dir)) {
-            fprintf(stderr,
-                    "%s: WARNING: tokenizer not loaded from '%s' "
-                    "(text prompts will not work)\n",
-                    __func__, tok_dir.c_str());
+        if (!sam3_load_bpe_vocab_from_stream(fin, model->tokenizer)) {
+            fprintf(stderr, "%s: failed to load embedded tokenizer\n", __func__);
+            return nullptr;
         }
     } else {
         fprintf(stderr, "%s: visual-only model — skipping tokenizer\n", __func__);
@@ -7847,8 +7715,66 @@ sam3_video_info sam3_get_video_info(const std::string& video_path) {
 static sam3_bpe_tokenizer g_test_tokenizer;
 static bool g_test_tokenizer_loaded = false;
 
-bool sam3_test_load_tokenizer(const std::string& dir) {
-    if (!sam3_load_bpe_vocab(g_test_tokenizer, dir)) return false;
+bool sam3_test_load_tokenizer(const std::string& model_path) {
+    std::ifstream fin(model_path, std::ios::binary);
+    if (!fin) return false;
+
+    // Read header
+    uint32_t magic;
+    int32_t version, ftype, n_tensors;
+    fin.read(reinterpret_cast<char*>(&magic), 4);
+    fin.read(reinterpret_cast<char*>(&version), 4);
+    fin.read(reinterpret_cast<char*>(&ftype), 4);
+    fin.read(reinterpret_cast<char*>(&n_tensors), 4);
+    if (magic != SAM3_MAGIC || version != SAM3_VERSION) return false;
+
+    // Skip hparams
+    sam3_hparams hp;
+    if (!sam3_load_hparams(fin, hp)) return false;
+    if (hp.visual_only) return false;
+
+    // Skip tensors
+    for (int t = 0; t < n_tensors; ++t) {
+        int32_t n_dims, name_len, dtype;
+        fin.read(reinterpret_cast<char*>(&n_dims), 4);
+        fin.read(reinterpret_cast<char*>(&name_len), 4);
+        fin.read(reinterpret_cast<char*>(&dtype), 4);
+        if (fin.fail()) return false;
+
+        // Read shape to compute data size
+        int64_t n_el = 1;
+        std::vector<int64_t> shape(n_dims);
+        for (int i = 0; i < n_dims; ++i) {
+            int32_t d;
+            fin.read(reinterpret_cast<char*>(&d), 4);
+            shape[i] = d;
+            n_el *= d;
+        }
+
+        // Skip name
+        fin.seekg(name_len, std::ios::cur);
+
+        // Skip padding to 32-byte alignment
+        size_t pos = fin.tellg();
+        size_t pad = (32 - pos % 32) % 32;
+        if (pad > 0) fin.seekg(pad, std::ios::cur);
+
+        // Compute data size and skip
+        const ggml_type file_type = static_cast<ggml_type>(dtype);
+        size_t bytes;
+        if (ggml_is_quantized(file_type)) {
+            const int64_t n_rows = n_el / shape[0];
+            bytes = ggml_row_size(file_type, shape[0]) * n_rows;
+        } else {
+            const size_t elem_size = (file_type == GGML_TYPE_F16) ? 2 : 4;
+            bytes = n_el * elem_size;
+        }
+        fin.seekg(bytes, std::ios::cur);
+        if (fin.fail()) return false;
+    }
+
+    // Read embedded tokenizer
+    if (!sam3_load_bpe_vocab_from_stream(fin, g_test_tokenizer)) return false;
     g_test_tokenizer_loaded = true;
     return true;
 }
