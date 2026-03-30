@@ -13,6 +13,9 @@ target_link_libraries(test_phase5 PRIVATE sam3)
 add_executable(test_phase6 test_phase6.cpp)
 target_link_libraries(test_phase6 PRIVATE sam3)
 
+add_executable(test_metal_phase6 test_metal_phase6.cpp)
+target_link_libraries(test_metal_phase6 PRIVATE sam3)
+
 add_executable(test_phase3 test_phase3.cpp)
 target_link_libraries(test_phase3 PRIVATE sam3)
 
@@ -67,6 +70,27 @@ target_link_libraries(test_metal_win PRIVATE sam3)
 add_executable(test_metal_vit test_metal_vit.cpp)
 target_link_libraries(test_metal_vit PRIVATE sam3)
 
+add_executable(test_metal_encoder_checkpoints test_metal_encoder_checkpoints.cpp)
+target_link_libraries(test_metal_encoder_checkpoints PRIVATE sam3)
+
+add_executable(test_metal_flash_attn_ext_block15_compare test_metal_flash_attn_ext_block15_compare.cpp)
+target_link_libraries(test_metal_flash_attn_ext_block15_compare PRIVATE sam3)
+
+add_executable(test_metal_vit_upstream_compare test_metal_vit_upstream_compare.cpp)
+target_link_libraries(test_metal_vit_upstream_compare PRIVATE sam3)
+
+add_executable(test_metal_vit_prefix_compare test_metal_vit_prefix_compare.cpp)
+target_link_libraries(test_metal_vit_prefix_compare PRIVATE sam3)
+
+add_executable(test_metal_block0_stage_compare test_metal_block0_stage_compare.cpp)
+target_link_libraries(test_metal_block0_stage_compare PRIVATE sam3)
+
+add_executable(test_metal_block_stage_compare test_metal_block_stage_compare.cpp)
+target_link_libraries(test_metal_block_stage_compare PRIVATE sam3)
+
+add_executable(test_metal_python_ref_compare test_metal_python_ref_compare.cpp)
+target_link_libraries(test_metal_python_ref_compare PRIVATE sam3)
+
 add_executable(test_metal_conv_dw test_metal_conv_dw.cpp)
 target_link_libraries(test_metal_conv_dw PRIVATE sam3)
 
@@ -82,9 +106,14 @@ target_link_libraries(test_v_cont_removal PRIVATE sam3)
 add_executable(test_metal_real_profile test_metal_real_profile.cpp)
 target_link_libraries(test_metal_real_profile PRIVATE sam3)
 
+add_executable(test_metal_conv_transpose_2d_stress test_metal_conv_transpose_2d_stress.cpp)
+target_link_libraries(test_metal_conv_transpose_2d_stress PRIVATE sam3)
+
+add_executable(test_metal_conv_transpose_2d test_metal_conv_transpose_2d.cpp)
+target_link_libraries(test_metal_conv_transpose_2d PRIVATE sam3)
+
 add_executable(test_visual_only test_visual_only.cpp)
 target_link_libraries(test_visual_only PRIVATE sam3)
 
 add_executable(test_visual_only_compare test_visual_only_compare.cpp)
 target_link_libraries(test_visual_only_compare PRIVATE sam3)
-
