@@ -1230,10 +1230,7 @@ struct sam3_state {
     ggml_backend_t        backend;
     ggml_backend_buffer_t buf_compute;
 
-    // Graph allocator for the image encoder (kept alive to preserve neck tensor buffers).
-    // NOTE: Do NOT reuse this allocator across pipeline stages.
-    // Each stage (text enc, fenc, ddec, seg head, memory enc, memory attn)
-    // MUST create its own ggml_gallocr to avoid buffer reuse corruption.
+    // Reusable graph allocator
     struct ggml_gallocr * galloc;
 };
 ```
@@ -2668,26 +2665,22 @@ This section defines the exact order in which to implement, from zero to a worki
 
 ### Phase 7: Video Tracking
 
-> **CRITICAL — Graph Isolation Rule:** Every function below that builds a ggml computation graph MUST use its own `ggml_context`, `ggml_cgraph`, and `ggml_gallocr`. State tensors (`state.neck_trk[*]`, `state.neck_det[*]`) must NEVER be used directly as operands in graph ops — always copy to fresh input tensors via CPU. See the "ggml graph isolation" section in CLAUDE.md.
-
 **Step 7.1: Memory encoder**
 
-- Implement `sam3_encode_memory()`: mask downsample + fuser + projection
-- Own sub-graph: create fresh `pix_in_raw` input (copy from `state.neck_trk[2]`)
-- **Verify:** Compare memory features [64, 72, 72] against Python `maskmem_backbone` output
+- Implement `sam3_build_mem_enc_graph()`: mask downsample + fuser + projection
+- **Verify:** Compare memory features
 
 **Step 7.2: Memory attention**
 
 - Implement `sam3_build_mem_attn_graph()`: 4-layer transformer with RoPE cross-attention
-- Own sub-graph inside `sam3_propagate_single()`
-- Create fresh `curr` input (copy from `state.neck_trk[2]`), fresh `trk_s0`, `trk_s1` (copy from `state.neck_trk[0,1]`)
-- **Verify:** Compare conditioned features against Python
+- Implement `sam3_rope_attention()` with kv_in_dim=64 and rope_k_repeat
+- **Verify:** Compare conditioned features
 
 **Step 7.3: Object pointer extraction**
 
-- Implement `sam3_extract_obj_ptr_cpu()`: 3-layer MLP projection of SAM output token
-- Handle occlusion case (use `no_obj_ptr`)
-- **Verify:** Compare object pointers [256] against Python
+- Implement `sam3_extract_obj_ptr()`: MLP projection of SAM output token
+- Handle occlusion case (use no_obj_ptr)
+- **Verify:** Compare object pointers
 
 **Step 7.4: Tracker infrastructure**
 
@@ -2699,12 +2692,11 @@ This section defines the exact order in which to implement, from zero to a worki
 **Step 7.5: Single-frame propagation**
 
 - Implement `sam3_propagate_single()`: memory attention → SAM mask decoder
-- Own sub-graph with ALL state tensors as fresh input copies
 - **Verify:** Compare propagated mask for frame N+1 given frame N's memory
 
 **Step 7.6: Detection + matching**
 
-- Implement `sam3_detect_frame()` (reuse PCS pipeline with its 5 sub-graphs)
+- Implement `sam3_detect_frame()` (reuse PCS pipeline)
 - Implement `sam3_match_detections()` (IoU-based matching)
 - Implement `sam3_update_tracker()`
 
@@ -2748,7 +2740,7 @@ This section defines the exact order in which to implement, from zero to a worki
 - Ensure outputs are absolutely identical and isomorphic
 - Profile with Instruments on macOS
 - Ensure Metal backend is used for all heavy operations
-- Optimize memory allocation — but DO NOT merge sub-graphs; each stage must keep its own `ggml_gallocr` (see "ggml graph isolation" in CLAUDE.md). Pre-allocate CPU buffers for inter-stage data transfer instead.
+- Optimize memory allocation (reuse graph allocators)
 - Target: <100ms per image, <50ms per video frame (on M1+)
 
 ### Phase 9: Polish
