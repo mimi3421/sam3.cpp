@@ -77,6 +77,42 @@ cd build && cmake .. && make -j$(sysctl -n hw.ncpu)
 
 Tests: `cmake .. -DSAM3_BUILD_TESTS=ON`
 
+## Benchmarking
+
+`sam3_benchmark` tracks an object across video frames and reports latency for every model × backend combination. Each run is forked into a subprocess so a crash does not kill the suite.
+
+```bash
+# Full benchmark (all 49 models × Metal + CPU):
+./build/examples/sam3_benchmark
+
+# Quick iteration (e.g. testing an optimization) — 4 runs, ~30 s:
+./build/examples/sam3_benchmark --filter tiny --n-frames 3 --filter-prec f16,q4_0
+
+# Metal only:
+./build/examples/sam3_benchmark --gpu-only
+
+# CPU only:
+./build/examples/sam3_benchmark --cpu-only
+```
+
+**Quick-iteration recipe:** when profiling or testing optimizations, `--filter tiny --n-frames 3` limits to the SAM2/2.1 tiny models on both Metal and CPU in f16 and q4_0 — just 4 runs total, enough to see whether a change helps without waiting for the full suite.
+
+All options:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--models-dir <path>` | `models/` | Directory containing `.ggml` files |
+| `--video <path>` | `data/test_video.mp4` | Video file |
+| `--point-x <f>` | `315.0` | X coordinate of the tracking point |
+| `--point-y <f>` | `250.0` | Y coordinate of the tracking point |
+| `--n-frames <n>` | `10` | Number of frames to track |
+| `--n-threads <n>` | `4` | CPU thread count |
+| `--cpu-only` | | Skip Metal runs |
+| `--gpu-only` | | Skip CPU runs |
+| `--filter <substr>` | | Only run models whose filename contains `<substr>` |
+
+Output columns: model name, file size, backend, load time, init time (frame 0 encode + add instance), average per-frame tracking time, total pipeline time, detection count, status. Diagnostics go to stderr; the final table goes to stdout (pipe-friendly: `./build/examples/sam3_benchmark 2>/dev/null > results.txt`).
+
 ## Weights
 
 PyTorch checkpoint → `convert_sam3_to_ggml.py` → `.ggml` binary. The conversion stores every tensor (1465 total). The C++ loader registers all 1465 and reads them via `ggml_backend_tensor_set`.
