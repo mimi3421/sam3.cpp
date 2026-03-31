@@ -7159,8 +7159,8 @@ static sam3_prompt_data sam3_build_prompt_and_pos(
         // Build positional encoding: spatial PE + temporal PE
         std::vector<float> pos = mem_slot_pes[s];  // copy spatial PE
         int tpos_idx = spatial_tpos[s];
-        if (tpos_idx > 0 && tpos_idx < hp.num_maskmem) {
-            int enc_idx = hp.num_maskmem - tpos_idx - 1;  // Python: maskmem_tpos_enc[7 - tpos - 1]
+        if (tpos_idx >= 0 && tpos_idx < hp.num_maskmem) {
+            int enc_idx = hp.num_maskmem - tpos_idx - 1;  // Python: maskmem_tpos_enc[num_maskmem - tpos - 1]
             for (int n = 0; n < HH; ++n)
                 for (int d = 0; d < MD; ++d)
                     pos[d + n * MD] += tpos_all[d + enc_idx * MD];
@@ -9036,6 +9036,10 @@ sam3_result sam3_segment_pvs(sam3_state& state,
     ggml_backend_tensor_get(dec_out.obj_score, &obj_logit, 0, sizeof(float));
     float obj_score = 1.0f / (1.0f + expf(-obj_logit));
 
+    // SAM output token: [D, 1] — needed for object pointer extraction in tracking
+    std::vector<float> sam_token_data(D);
+    ggml_backend_tensor_get(dec_out.sam_token, sam_token_data.data(), 0, D * sizeof(float));
+
     SAM3_LOG(2, "%s: obj_score=%.4f (logit=%.4f), iou=[%.3f, %.3f, %.3f, %.3f]\n",
              __func__, obj_score, obj_logit,
              iou_data[0], iou_data[1], iou_data[2], iou_data[3]);
@@ -9054,6 +9058,7 @@ sam3_result sam3_segment_pvs(sam3_state& state,
 
     for (int m = start_idx; m < end_idx; ++m) {
         sam3_detection det;
+        det.sam_token = sam_token_data;
 
         // Resize mask from 288×288 to original image size
         const float* mask_ptr = masks_data.data() + m * mask_hw * mask_hw;
@@ -9184,10 +9189,13 @@ static sam3_prop_output sam3_propagate_single(
     int P = std::min((int)ptr_bank.size(), hp.max_obj_ptrs);
     std::vector<std::vector<float>> obj_ptrs(P);
     std::vector<int> ptr_tpos(P);
+    int cur_frame = tracker.frame_index;
     for (int p = 0; p < P; ++p) {
         obj_ptrs[p].resize(D);
         ggml_backend_tensor_get(ptr_bank[p].second, obj_ptrs[p].data(), 0, D * sizeof(float));
-        ptr_tpos[p] = p + 1;  // relative distance
+        // Use actual frame distance (matches Python: abs(frame_idx - t))
+        ptr_tpos[p] = std::abs(cur_frame - ptr_bank[p].first);
+        if (ptr_tpos[p] < 1) ptr_tpos[p] = 1;  // minimum distance of 1
     }
 
     auto pd = sam3_build_prompt_and_pos(model, slot_feats, slot_pes, spatial_tpos, obj_ptrs, ptr_tpos);
@@ -9878,9 +9886,15 @@ bool sam3_refine_instance(sam3_tracker& tracker, sam3_state& state,
     // tracker.frame_index points to the *next* frame; the refinement applies
     // to the frame that was last tracked / encoded.
     int fi = std::max(0, tracker.frame_index - 1);
-    tgt->last_score = r.detections[0].score;
+    const auto& rdet = r.detections[0];
+    tgt->last_score = rdet.score;
     tgt->last_seen = fi;
-    std::vector<float> op(D, 0.0f);
+    std::vector<float> op(D);
+    if (!rdet.sam_token.empty()) {
+        sam3_extract_obj_ptr_cpu(model, rdet.sam_token.data(), rdet.mask.obj_score, op.data());
+    } else {
+        std::fill(op.begin(), op.end(), 0.0f);
+    }
     sam3_store_obj_ptr(tracker, model, instance_id, op.data(), fi);
     SAM3_LOG(2, "%s: refined instance %d\n", __func__, instance_id);
     return true;
@@ -9936,8 +9950,13 @@ int sam3_tracker_add_instance(sam3_tracker& tracker, sam3_state& state,
         return -1;
     }
 
-    // Store a zero object pointer (no raw SAM token available from PVS public API)
-    std::vector<float> op(D, 0.0f);
+    // Extract object pointer from the SAM decoder token
+    std::vector<float> op(D);
+    if (!det.sam_token.empty()) {
+        sam3_extract_obj_ptr_cpu(model, det.sam_token.data(), obj_score, op.data());
+    } else {
+        std::fill(op.begin(), op.end(), 0.0f);
+    }
     sam3_store_obj_ptr(tracker, model, inst_id, op.data(), fi);
 
     // Create confirmed masklet

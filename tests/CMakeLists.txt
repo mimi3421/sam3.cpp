@@ -124,3 +124,6 @@ target_link_libraries(test_sam2_backbone_compare PRIVATE sam3)
 add_executable(test_sam2_pe_cache_size test_sam2_pe_cache_size.cpp)
 target_link_libraries(test_sam2_pe_cache_size PRIVATE sam3)
 
+add_executable(test_sam2_video_debug test_sam2_video_debug.cpp)
+target_link_libraries(test_sam2_video_debug PRIVATE sam3)
+

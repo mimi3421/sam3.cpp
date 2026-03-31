@@ -70,6 +70,7 @@ struct sam3_detection {
     float     iou_score = 0.0f;
     int       instance_id = -1;
     sam3_mask  mask;
+    std::vector<float> sam_token;  // raw SAM decoder output token (for obj_ptr)
 };
 
 struct sam3_result {
