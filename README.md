@@ -14,14 +14,15 @@ State-of-the-art image and video segmentation in portable C/C++
 
 ## Why sam3.cpp?
 
-Running Meta's Segment Anything models typically requires Python, PyTorch, and a CUDA GPU. **sam3.cpp** eliminates all of that. It's a single C++ library that runs SAM 2, SAM 2.1, and SAM 3 inference on CPU and Apple Metal. No Python runtime, no GPU drivers, no heavyweight dependencies. Just compile and segment.
+Running Meta's Segment Anything models typically requires Python, PyTorch, and a CUDA GPU. **sam3.cpp** eliminates all of that. It's a single C++ library that runs SAM 2, SAM 2.1, SAM 3, and EdgeTAM inference on CPU and Apple Metal. No Python runtime, no GPU drivers, no heavyweight dependencies. Just compile and segment.
 
-- **3 model families in one library**: SAM 2, SAM 2.1 (Hiera backbone), and SAM 3 (ViT backbone + text detection), all sizes from Tiny to Large
-- **4-bit quantization**: SAM 2.1 Tiny fits in **22 MB** and tracks objects at **~1 fps** on Metal; SAM 3 drops from 3.4 GB to 673 MB with Q4_0
-- **Apple Metal GPU acceleration**: the full ViT/Hiera backbone and transformer decoder run on the GPU via ggml's Metal backend
+- **4 model families in one library**: SAM 2, SAM 2.1 (Hiera backbone), SAM 3 (ViT backbone + text detection), and EdgeTAM (RepViT backbone — 22x faster than SAM 2 on mobile)
+- **4-bit quantization**: EdgeTAM fits in **15 MB** with Q4_0; SAM 2.1 Tiny in **22 MB** tracking at **~1 fps** on Metal; SAM 3 drops from 3.4 GB to 673 MB
+- **Apple Metal GPU acceleration**: the full ViT/Hiera/RepViT backbone and transformer decoder run on the GPU via ggml's Metal backend
 - **Text-prompted detection** (SAM 3): type `"cat"` and get every cat in the image, no clicks needed. This is the PCS (Promptable Concept Segmentation) path, unique to SAM 3
-- **Point/box segmentation** (all models): click a point or draw a box, get a mask. The classic SAM workflow, available for SAM 2, 2.1, and 3
+- **Point/box segmentation** (all models): click a point or draw a box, get a mask. The classic SAM workflow, available for SAM 2, 2.1, 3, and EdgeTAM
 - **Video object tracking**: memory bank with 7 temporal slots propagates masks across frames. Add instances mid-video, refine with clicks, export per-frame PNGs
+- **On-device tracking** (EdgeTAM): RepViT-M1 backbone with Perceiver memory compression achieves real-time tracking on Apple Silicon — 27 MB model, **~440 ms/frame** on Metal
 - **Single-file library**: `sam3.cpp` + `sam3.h`. Structs and free functions only, C++14, no exceptions, no inheritance
 - **Zero dependencies** beyond [ggml](https://github.com/ggerganov/ggml) (tensor computation, bundled as submodule) and [stb](https://github.com/nothings/stb) (image I/O, vendored)
 
@@ -73,6 +74,14 @@ Video object tracking latency on **Apple M4 Pro (24 GB)**, 5 frames at 1008x1008
 | sam3-visual-q8_0 | 493 MB | **6.7** | 22.0 | 33.0 | 108.4 |
 | sam3-visual-q4_1 | 318 MB | - | 23.1 | - | 113.9 |
 | sam3-visual-q4_0 | 275 MB | **6.7** | 22.3 | 33.0 | 110.0 |
+
+### EdgeTAM (RepViT backbone + Perceiver)
+
+| Model | Size | Track/frame Metal (s) | Track/frame CPU (s) | Total Metal (s) | Total CPU (s) |
+|-------|------|-----------------------|---------------------|-----------------|---------------|
+| edgetam_f16 | 27 MB | **0.4** | 1.1 | 2.2 | 5.2 |
+| edgetam_q8_0 | 19 MB | **0.4** | 1.1 | 2.1 | 5.1 |
+| edgetam_q4_0 | 15 MB | **0.4** | 1.1 | 2.1 | 5.1 |
 
 ### SAM 2 / SAM 2.1 (Hiera backbone)
 
@@ -126,7 +135,7 @@ Options: `--models-dir <path>`, `--video <path>`, `--n-frames <n>`, `--n-threads
 
 All models are available in GGML format on Hugging Face:
 
-**[PABannier/sam3.cpp](https://huggingface.co/PABannier/sam3.cpp)** — 49 model files covering 3 architectures x 4 sizes x 5 precisions.
+**[PABannier/sam3.cpp](https://huggingface.co/PABannier/sam3.cpp)** — 52 model files covering 4 architectures x multiple sizes x up to 5 precisions.
 
 ### SAM 3 (850M params — ViT-32 backbone + text encoder + DETR decoder)
 
@@ -155,17 +164,25 @@ All models are available in GGML format on Hugging Face:
 | SAM 2.1 | Base+ | 81M | 323 MB | 163 MB | 88 MB | 53 MB | 48 MB |
 | SAM 2.1 | Large | 224M | 898 MB | 451 MB | 241 MB | 144 MB | 130 MB |
 
+### EdgeTAM (RepViT-M1 backbone + Perceiver memory compressor)
+
+| Variant | Precision | Size | Features |
+|---------|-----------|------|----------|
+| edgetam | f16 | 27 MB | Point/box segmentation (PVS) + video tracking |
+| edgetam | q8_0 | 19 MB | Same |
+| edgetam | q4_0 | 15 MB | Same |
+
 ### Feature Matrix
 
-| Capability | SAM 3 | SAM 3 Visual | SAM 2 / 2.1 |
-|-----------|-------|-------------|-------------|
-| Text-prompted detection (PCS) | Yes | - | - |
-| Point/box segmentation (PVS) | Yes | Yes | Yes |
-| Multi-mask output | Yes | Yes | Yes |
-| Video tracking (memory bank) | Yes | Yes | Yes |
-| Interactive refinement | Yes | Yes | Yes |
-| Quantization (Q4/Q8) | Yes | Yes | Yes |
-| Metal GPU | Yes | Yes | Yes |
+| Capability | SAM 3 | SAM 3 Visual | SAM 2 / 2.1 | EdgeTAM |
+|-----------|-------|-------------|-------------|---------|
+| Text-prompted detection (PCS) | Yes | - | - | - |
+| Point/box segmentation (PVS) | Yes | Yes | Yes | Yes |
+| Multi-mask output | Yes | Yes | Yes | Yes |
+| Video tracking (memory bank) | Yes | Yes | Yes | Yes |
+| Interactive refinement | Yes | Yes | Yes | Yes |
+| Quantization (Q4/Q8) | Yes | Yes | Yes | Yes |
+| Metal GPU | Yes | Yes | Yes | Yes |
 
 ## Building from Source
 
@@ -222,7 +239,7 @@ make -j
 ### Video Tracking (Interactive GUI)
 
 ```bash
-# Visual tracking (SAM 2/2.1/3)
+# Visual tracking (SAM 2/2.1/3/EdgeTAM)
 ./sam3_video --model models/sam2.1_hiera_small_f16.ggml --video input.mp4
 
 # Text-prompted tracking (SAM 3 only)
@@ -323,13 +340,19 @@ uv run python convert_sam2_to_ggml.py \
     --config sam2.1_hiera_l.yaml \
     --output models/sam2.1_hiera_large_f16.ggml \
     --ftype 1
+
+# EdgeTAM
+uv run python convert_edgetam_to_ggml.py \
+    --model edgetam.pt \
+    --output models/edgetam_f16.ggml \
+    --ftype 1
 ```
 
 `--ftype 0` = float32, `--ftype 1` = float16 (recommended). Then quantize with `sam3_quantize`.
 
 ## Acknowledgments
 
-- [Meta AI Research](https://github.com/facebookresearch) — SAM, SAM 2, and SAM 3
+- [Meta AI Research](https://github.com/facebookresearch) — SAM, SAM 2, SAM 3, and EdgeTAM
 - [ggml](https://github.com/ggerganov/ggml) — the tensor computation library that makes this possible
 - [sam.cpp](https://github.com/YavorGIvanov/sam.cpp) — the original SAM 1 C++ port that inspired this project's architecture
 
