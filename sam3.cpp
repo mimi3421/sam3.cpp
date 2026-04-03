@@ -1,3 +1,5 @@
+#define _USE_MATH_DEFINES
+
 #include "sam3.h"
 
 /* ggml */
@@ -14,7 +16,16 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+
+#ifdef _WIN32
+#include <direct.h>
+#include <io.h>
+#define popen  _popen
+#define pclose _pclose
+#define mkdir(path, mode) _mkdir(path)
+#else
 #include <sys/stat.h>
+#endif
 
 /* C++ standard library */
 #include <algorithm>

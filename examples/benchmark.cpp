@@ -4,8 +4,9 @@
  * Tracks an object (point prompt) across N video frames on CPU and Metal,
  * then prints a formatted comparison table.
  *
- * Each model × backend run is isolated in a forked subprocess so that a
- * crash (e.g. unsupported Metal op) does not kill the entire benchmark.
+ * On POSIX systems each model × backend run is isolated in a forked subprocess
+ * so that a crash (e.g. unsupported Metal op) does not kill the entire benchmark.
+ * On Windows, benchmarks run in-process (no crash isolation).
  *
  * Usage:
  *   sam3_benchmark [options]
@@ -32,10 +33,15 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <sys/stat.h>
+#else
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 // ── Wire format for child→parent result ─────────────────────────────────────
 
@@ -130,6 +136,33 @@ struct ModelEntry {
 static std::vector<ModelEntry> discover_models(const std::string & dir,
                                                 const std::string & filter) {
     std::vector<ModelEntry> entries;
+
+#ifdef _WIN32
+    std::string pattern = dir + "\\*.ggml";
+    WIN32_FIND_DATAA fd;
+    HANDLE hFind = FindFirstFileA(pattern.c_str(), &fd);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        fprintf(stderr, "ERROR: cannot open models directory '%s'\n", dir.c_str());
+        return entries;
+    }
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        std::string fname = fd.cFileName;
+        if (!ends_with(fname, ".ggml")) continue;
+        if (!filter.empty() && fname.find(filter) == std::string::npos) continue;
+
+        std::string full_path = dir + "\\" + fname;
+        struct _stat st;
+        if (_stat(full_path.c_str(), &st) != 0) continue;
+
+        ModelEntry e;
+        e.path      = full_path;
+        e.name      = strip_extension(fname);
+        e.file_size = st.st_size;
+        entries.push_back(e);
+    } while (FindNextFileA(hFind, &fd));
+    FindClose(hFind);
+#else
     DIR * d = opendir(dir.c_str());
     if (!d) {
         fprintf(stderr, "ERROR: cannot open models directory '%s'\n", dir.c_str());
@@ -152,6 +185,7 @@ static std::vector<ModelEntry> discover_models(const std::string & dir,
         entries.push_back(e);
     }
     closedir(d);
+#endif
 
     std::sort(entries.begin(), entries.end(), [](const ModelEntry & a, const ModelEntry & b) {
         return model_sort_key(a.name) < model_sort_key(b.name);
@@ -159,35 +193,27 @@ static std::vector<ModelEntry> discover_models(const std::string & dir,
     return entries;
 }
 
-// ── Child process: run a single benchmark ───────────────────────────────────
+// ── Run a single benchmark (shared logic) ──────────────────────────────────
 
-static void child_benchmark(const std::string & model_path,
-                             bool use_gpu,
-                             const std::string & video_path,
-                             int n_frames,
-                             float px, float py,
-                             int n_threads,
-                             int encode_img_size,
-                             int write_fd) {
+static BenchWire run_single_benchmark(const std::string & model_path,
+                                       bool use_gpu,
+                                       const std::string & video_path,
+                                       int n_frames,
+                                       float px, float py,
+                                       int n_threads,
+                                       int encode_img_size) {
     BenchWire wire = {};
-
-    auto write_result = [&]() {
-        (void)write(write_fd, &wire, sizeof(wire));
-        close(write_fd);
-    };
 
     auto fail = [&](const char * msg) {
         wire.ok = 0;
         snprintf(wire.error, sizeof(wire.error), "%s", msg);
-        write_result();
-        _exit(1);
     };
 
     // Decode frames
     std::vector<sam3_image> frames(n_frames);
     for (int f = 0; f < n_frames; f++) {
         frames[f] = sam3_decode_video_frame(video_path, f);
-        if (frames[f].data.empty()) { fail("decode frame failed"); return; }
+        if (frames[f].data.empty()) { fail("decode frame failed"); return wire; }
     }
 
     // Load model
@@ -200,10 +226,10 @@ static void child_benchmark(const std::string & model_path,
     params.encode_img_size = encode_img_size;
 
     auto model = sam3_load_model(params);
-    if (!model) { fail("load failed"); return; }
+    if (!model) { fail("load failed"); return wire; }
 
     auto state = sam3_create_state(*model, params);
-    if (!state) { fail("state failed"); return; }
+    if (!state) { fail("state failed"); return wire; }
 
     bool visual_only = sam3_is_visual_only(*model);
     sam3_tracker_ptr tracker;
@@ -219,7 +245,7 @@ static void child_benchmark(const std::string & model_path,
         vp.max_keep_alive = 100;
         tracker = sam3_create_tracker(*model, vp);
     }
-    if (!tracker) { fail("tracker failed"); return; }
+    if (!tracker) { fail("tracker failed"); return wire; }
 
     wire.t_load_ms = (ggml_time_us() - t0) / 1000.0;
 
@@ -227,7 +253,7 @@ static void child_benchmark(const std::string & model_path,
     t0 = ggml_time_us();
 
     if (!sam3_encode_image(*state, *model, frames[0])) {
-        fail("encode f0 failed"); return;
+        fail("encode f0 failed"); return wire;
     }
 
     sam3_pvs_params pvs;
@@ -235,7 +261,7 @@ static void child_benchmark(const std::string & model_path,
     pvs.multimask = false;
 
     int inst_id = sam3_tracker_add_instance(*tracker, *state, *model, pvs);
-    if (inst_id < 0) { fail("add_instance failed"); return; }
+    if (inst_id < 0) { fail("add_instance failed"); return wire; }
 
     wire.t_frame0_ms = (ggml_time_us() - t0) / 1000.0;
 
@@ -266,11 +292,28 @@ static void child_benchmark(const std::string & model_path,
     wire.n_detections = (int)last_result.detections.size();
     wire.ok           = 1;
 
-    write_result();
-    _exit(0);
+    return wire;
 }
 
-// ── Parent: launch child and collect result ─────────────────────────────────
+// ── Isolated benchmark execution ───────────────────────────────────────────
+
+#ifndef _WIN32
+// POSIX: fork a subprocess for crash isolation
+static void child_benchmark(const std::string & model_path,
+                             bool use_gpu,
+                             const std::string & video_path,
+                             int n_frames,
+                             float px, float py,
+                             int n_threads,
+                             int encode_img_size,
+                             int write_fd) {
+    BenchWire wire = run_single_benchmark(model_path, use_gpu, video_path,
+                                           n_frames, px, py, n_threads, encode_img_size);
+    (void)write(write_fd, &wire, sizeof(wire));
+    close(write_fd);
+    _exit(wire.ok ? 0 : 1);
+}
+#endif
 
 static BenchResult run_benchmark_isolated(const ModelEntry & entry,
                                            bool use_gpu,
@@ -284,6 +327,21 @@ static BenchResult run_benchmark_isolated(const ModelEntry & entry,
     res.backend    = use_gpu ? "Metal" : "CPU";
     res.file_size  = entry.file_size;
 
+#ifdef _WIN32
+    // Windows: run in-process (no crash isolation)
+    BenchWire wire = run_single_benchmark(entry.path, use_gpu, video_path,
+                                           n_frames, px, py, n_threads, encode_img_size);
+    if (wire.ok) {
+        res.t_load_ms      = wire.t_load_ms;
+        res.t_frame0_ms    = wire.t_frame0_ms;
+        res.t_track_avg_ms = wire.t_track_avg_ms;
+        res.t_total_ms     = wire.t_total_ms;
+        res.n_detections   = wire.n_detections;
+        res.success        = true;
+    } else {
+        res.error = wire.error;
+    }
+#else
     int pipefd[2];
     if (pipe(pipefd) != 0) {
         res.error = "pipe() failed";
@@ -332,6 +390,7 @@ static BenchResult run_benchmark_isolated(const ModelEntry & entry,
     } else {
         res.error = "child failed (no result)";
     }
+#endif
 
     return res;
 }
@@ -479,7 +538,11 @@ int main(int argc, char ** argv) {
         return a.use_gpu > b.use_gpu;  // Metal first
     });
 
+#ifdef _WIN32
+    fprintf(stderr, "\nStarting %zu benchmark runs (in-process)...\n\n", runs.size());
+#else
     fprintf(stderr, "\nStarting %zu benchmark runs (each in a subprocess)...\n\n", runs.size());
+#endif
 
     // Run benchmarks
     int64_t t_wall_start = ggml_time_us();
