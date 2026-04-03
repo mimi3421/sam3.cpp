@@ -2,8 +2,8 @@
 
 State-of-the-art image and video segmentation in portable C/C++
 
-![SAM3 Image Segmentation Demo](https://i.imgur.com/xmnxNP1.gif)
-![SAM3 Video Segmentation Demo](https://i.imgur.com/5y9QcrY.gif)
+![SAM3 Image Segmentation Demo](media/image_demo.gif)
+![SAM3 Video Segmentation Demo](media/video_demo.gif)
 
 ---
 
