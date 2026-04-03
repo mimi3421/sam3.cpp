@@ -59,7 +59,7 @@
 static constexpr uint32_t SAM3_MAGIC     = 0x73616D33;  // "sam3"
 static constexpr uint32_t SAM2_MAGIC     = 0x73616D32;  // "sam2"
 static constexpr uint32_t SAM3_TOK_MAGIC = 0x746F6B00;  // "tok\0"
-static constexpr int      SAM3_VERSION   = 3;
+static constexpr int      SAM3_FILE_VERSION = 3;
 static constexpr int      SAM2_VERSION   = 1;
 
 
@@ -3216,9 +3216,9 @@ std::shared_ptr<sam3_model> sam3_load_model(const sam3_params& params) {
 
     bool is_sam2 = false;
     if (magic == SAM3_MAGIC) {
-        if (version != SAM3_VERSION) {
+        if (version != SAM3_FILE_VERSION) {
             fprintf(stderr, "%s: unsupported SAM3 version: %d (expected %d)\n",
-                    __func__, version, SAM3_VERSION);
+                    __func__, version, SAM3_FILE_VERSION);
             return nullptr;
         }
     } else if (magic == SAM2_MAGIC) {
@@ -12368,7 +12368,7 @@ bool sam3_test_load_tokenizer(const std::string& model_path) {
     fin.read(reinterpret_cast<char*>(&version), 4);
     fin.read(reinterpret_cast<char*>(&ftype), 4);
     fin.read(reinterpret_cast<char*>(&n_tensors), 4);
-    if (magic != SAM3_MAGIC || version != SAM3_VERSION) return false;
+    if (magic != SAM3_MAGIC || version != SAM3_FILE_VERSION) return false;
 
     // Skip hparams
     sam3_hparams hp;

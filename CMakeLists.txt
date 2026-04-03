@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(sam3.cpp LANGUAGES C CXX)
+project(sam3.cpp VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

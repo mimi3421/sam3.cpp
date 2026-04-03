@@ -6,6 +6,15 @@
 #include <vector>
 
 /*
+** ── Version ─────────────────────────────────────────────────────────────
+*/
+
+#define SAM3_VERSION_MAJOR 1
+#define SAM3_VERSION_MINOR 0
+#define SAM3_VERSION_PATCH 0
+#define SAM3_VERSION       "1.0.0"
+
+/*
 ** ── Forward Declarations ─────────────────────────────────────────────────
 */
 
