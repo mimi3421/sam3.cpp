@@ -91,6 +91,9 @@ jobs:
           # ggml static libs
           Get-ChildItem -Path build/ggml -Recurse -Filter "*.lib" | Copy-Item -Destination staging/${{ matrix.artifact }}/lib/
 
+          # SDL sdk
+          vcpkg install sdl2:x64-windows
+          
           # Headers
           Copy-Item sam3.h staging/${{ matrix.artifact }}/include/
           Get-ChildItem -Path ggml/include -Filter "*.h" | Copy-Item -Destination staging/${{ matrix.artifact }}/include/
