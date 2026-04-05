@@ -22,8 +22,8 @@
 #endif
 #include <OpenGL/gl3.h>
 #else
-//#include <SDL2/SDL_opengl.h> 
-#include <GL/gl.h>
+#include <SDL2/SDL_opengl.h> 
+//#include <GL/gl.h>
 #endif
 
 #include <SDL.h>
