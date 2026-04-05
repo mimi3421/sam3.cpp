@@ -11,6 +11,8 @@
 //   [Play]/[Pause]/[Step] for playback control.
 //   [Export] saves mask PNGs per frame.
 
+#define SDL_MAIN_HANDLED 
+
 #include "sam3.h"
  
 #ifdef __APPLE__
