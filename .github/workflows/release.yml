@@ -71,14 +71,14 @@ jobs:
       # ============================================
       
       - name: Configure
-        run: |
-          set CMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+        run: >
           cmake -B build
           ${{ runner.os != 'Windows' && '-G Ninja' || '' }}
           ${{ matrix.cmake_args }}
           ${{ runner.os != 'Windows' && '-DCMAKE_BUILD_TYPE=Release' || '' }}
           -DCMAKE_C_COMPILER_LAUNCHER=ccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
 
       - name: Build
         run: cmake --build build ${{ matrix.build_args }} --parallel
