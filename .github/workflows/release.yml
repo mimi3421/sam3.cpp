@@ -42,6 +42,13 @@ jobs:
         with:
           key: release-${{ matrix.artifact }}
 
+      - name: Install SDL (Windows)
+        if: runner.os == 'Windows'
+        run:
+          # SDL sdk
+          vcpkg install sdl2:x64-windows
+        
+        
       - name: Configure
         run: >
           cmake -B build
@@ -91,15 +98,13 @@ jobs:
           # ggml static libs
           Get-ChildItem -Path build/ggml -Recurse -Filter "*.lib" | Copy-Item -Destination staging/${{ matrix.artifact }}/lib/
 
-          # SDL sdk
-          vcpkg install sdl2:x64-windows
           
           # Headers
           Copy-Item sam3.h staging/${{ matrix.artifact }}/include/
           Get-ChildItem -Path ggml/include -Filter "*.h" | Copy-Item -Destination staging/${{ matrix.artifact }}/include/
 
           # Example binaries
-          foreach ($bin in @("sam3_quantize", "sam3_benchmark", "sam3_profile_edgetam")) {
+          foreach ($bin in @("sam3_quantize", "sam3_benchmark", "sam3_profile_edgetam", "sam3_image", "sam3_video")) {
             $paths = @("build/examples/Release/${bin}.exe", "build/examples/${bin}.exe")
             foreach ($p in $paths) {
               if (Test-Path $p) { Copy-Item $p staging/${{ matrix.artifact }}/bin/; break }
