@@ -12,6 +12,8 @@
 //   [Clear] resets prompts and masks.
 //   [Export] saves masks as PNG files.
 
+#define SDL_MAIN_HANDLED 
+
 #include "sam3.h"
  
 #ifdef __APPLE__
