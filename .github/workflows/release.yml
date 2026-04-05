@@ -82,6 +82,7 @@ jobs:
           ${{ runner.os != 'Windows' && '-G Ninja' || '' }}
           ${{ matrix.cmake_args }}
           ${{ runner.os != 'Windows' && '-DCMAKE_BUILD_TYPE=Release' || '' }}
+          -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_C_COMPILER_LAUNCHER=ccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
