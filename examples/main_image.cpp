@@ -13,20 +13,17 @@
 //   [Export] saves masks as PNG files.
 
 #include "sam3.h"
-
-#include <SDL.h>
-#include <imgui.h>
-#include <imgui_impl_sdl2.h>
-#include <imgui_impl_opengl3.h>
-
+ 
 #ifdef __APPLE__
 #ifndef GL_SILENCE_DEPRECATION
 #define GL_SILENCE_DEPRECATION
 #endif
 #include <OpenGL/gl3.h>
 #else
-#include <GL/gl.h>
+#include <SDL2/SDL_opengl.h> 
 #endif
+
+#include <SDL.h>
 
 #include <algorithm>
 #include <cmath>
