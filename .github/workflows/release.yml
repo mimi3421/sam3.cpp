@@ -48,7 +48,28 @@ jobs:
           # SDL sdk
           vcpkg install sdl2:x64-windows
         
-        
+      # ================= 新增步骤 =================
+      - name: Download ImGui (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $targetDir = "examples/third-party"
+          $zipUrl = "https://github.com/ocornut/imgui/archive/refs/tags/v1.92.7.zip"
+          $zipFile = "imgui-v1.92.7.zip"
+
+          # 确保目标目录存在
+          New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+          # 下载 zip
+          Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile
+          # 解压到目标目录
+          Expand-Archive -Path $zipFile -DestinationPath $targetDir -Force
+          # 重命名解压后的文件夹
+          Rename-Item -Path "$targetDir/imgui-1.92.7" -NewName "imgui"
+          # 清理临时文件
+          Remove-Item $zipFile -Force
+      # ============================================
+      
       - name: Configure
         run: >
           cmake -B build
