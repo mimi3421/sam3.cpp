@@ -41,6 +41,12 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1
         with:
           key: release-${{ matrix.artifact }}
+          
+      - name: Install opengl (Windows)
+        if: runner.os == 'Windows'
+        run:
+          # opengl sdk
+          vcpkg install opengl
 
       - name: Install SDL (Windows)
         if: runner.os == 'Windows'
