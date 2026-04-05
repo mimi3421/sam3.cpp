@@ -1,9 +1,12 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch: # allows manual triggering
+    inputs:
+      create_release:
+        description: 'Create new release'
+        required: true
+        type: boolean
 
 jobs:
   build:
@@ -13,34 +16,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: macOS arm64 (Metal)
-            os: macos-latest
-            artifact: sam3-darwin-arm64
-            cmake_args: "-DBUILD_SHARED_LIBS=OFF"
-            build_args: ""
-            ext: tar.gz
-
-          - name: macOS x86_64
-            os: macos-13
-            artifact: sam3-darwin-x86_64
-            cmake_args: "-DGGML_METAL=OFF -DSAM3_METAL=OFF -DBUILD_SHARED_LIBS=OFF"
-            build_args: ""
-            ext: tar.gz
-
-          - name: Linux x86_64
-            os: ubuntu-latest
-            artifact: sam3-linux-x86_64
-            cmake_args: "-DGGML_METAL=OFF -DSAM3_METAL=OFF -DBUILD_SHARED_LIBS=OFF"
-            build_args: ""
-            ext: tar.gz
-
-          - name: Linux arm64
-            os: ubuntu-24.04-arm
-            artifact: sam3-linux-arm64
-            cmake_args: "-DGGML_METAL=OFF -DSAM3_METAL=OFF -DBUILD_SHARED_LIBS=OFF"
-            build_args: ""
-            ext: tar.gz
-
           - name: Windows x86_64
             os: windows-latest
             artifact: sam3-win-x86_64
