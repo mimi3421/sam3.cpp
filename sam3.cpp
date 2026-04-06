@@ -12314,14 +12314,14 @@ sam3_image sam3_decode_video_frame(const std::string& video_path, int frame_inde
              "-f rawvideo -pix_fmt rgb24 pipe:1",
              video_path.c_str(), frame_index);
 
-    fp = popen(cmd, "r");
+    fp = popen(cmd, "rb");
     if (!fp) {
         img.data.clear();
         return img;
     }
    
-    //size_t nread = fread(img.data.data(), 1, img.data.size(), fp);
-   // promise every byte read
+    size_t nread = fread(img.data.data(), 1, img.data.size(), fp);
+   /* promise every byte read
    size_t total_read = 0;
    size_t nread = 0;
    while (total_read < expected_size) {
@@ -12332,7 +12332,7 @@ sam3_image sam3_decode_video_frame(const std::string& video_path, int frame_inde
            break;
        }
        total_read += nread;
-   }
+   }*/
     pclose(fp);
     if (nread != img.data.size()) {
         img.data.clear();
