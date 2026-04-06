@@ -152,3 +152,33 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}.${{ matrix.ext }}
 
+
+  release:
+    name: Create Release
+    needs: build
+    if: ${{ inputs.create_release }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: sam3.cpp ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+          generate_release_notes: true
+          files: |
+            artifacts/sam3-darwin-arm64/*.tar.gz
+            artifacts/sam3-darwin-x86_64/*.tar.gz
+            artifacts/sam3-linux-x86_64/*.tar.gz
+            artifacts/sam3-linux-arm64/*.tar.gz
+            artifacts/sam3-win-x86_64/*.zip
+
