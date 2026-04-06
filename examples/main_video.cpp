@@ -37,6 +37,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <csignal> // fore ignore SIGPIPE
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -368,6 +369,7 @@ static void export_frame_masks(const vapp_state& app) {
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char** argv) {
+    signal(SIGPIPE, SIG_IGN);
     vapp_state app;
     app.params.n_threads = 4;
     app.params.use_gpu   = true;
