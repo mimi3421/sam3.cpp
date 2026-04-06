@@ -53,7 +53,7 @@ jobs:
         run: |
           # SDL sdk
           vcpkg install sdl2:x64-windows
-          vcpkg install sdl2:x64-windows-static
+          #vcpkg install sdl2:x64-windows-static
         
       # ================= 新增步骤 =================
       - name: Download ImGui (Windows)
@@ -87,7 +87,6 @@ jobs:
           -DCMAKE_C_COMPILER_LAUNCHER=ccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
-          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL
 
       - name: Build
         run: cmake --build build ${{ matrix.build_args }} --parallel
@@ -143,7 +142,7 @@ jobs:
           }
           
           # DLL dependencies
-          #Copy-Item "C:/vcpkg/installed/x64-windows/bin/SDL2.dll" staging/${{ matrix.artifact }}/bin/
+          Copy-Item "C:/vcpkg/installed/x64-windows/bin/SDL2.dll" staging/${{ matrix.artifact }}/bin/
 
 
 
