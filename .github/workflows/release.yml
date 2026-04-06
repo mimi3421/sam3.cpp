@@ -52,8 +52,8 @@ jobs:
         if: runner.os == 'Windows'
         run:
           # SDL sdk
-          # vcpkg install sdl2:x64-windows
-          vcpkg install sdl2:x64-windows-static-md
+          vcpkg install sdl2:x64-windows
+          vcpkg install sdl2:x64-windows-static
         
       # ================= 新增步骤 =================
       - name: Download ImGui (Windows)
