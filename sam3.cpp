@@ -12289,14 +12289,14 @@ sam3_image sam3_decode_video_frame(const std::string& video_path, int frame_inde
     snprintf(cmd, sizeof(cmd),
              "ffmpeg -nostdin -loglevel error -i \"%s\" "
              "-vf \"select=eq(n\\,%d)\" -vsync vfr -frames:v 1 "
-             "-f rawvideo -pix_fmt rgb24 pipe:1 2>/dev/null",
+             "-f rawvideo -pix_fmt rgb24 pipe:1",
              video_path.c_str(), frame_index);
 
     // First, get dimensions
     char info_cmd[1024];
     snprintf(info_cmd, sizeof(info_cmd),
              "ffprobe -v error -select_streams v:0 "
-             "-show_entries stream=width,height -of csv=p=0 \"%s\" 2>/dev/null",
+             "-show_entries stream=width,height -of csv=p=0 \"%s\"",
              video_path.c_str());
     FILE* fp = popen(info_cmd, "r");
     if (!fp) return img;
