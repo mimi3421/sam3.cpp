@@ -12333,7 +12333,7 @@ sam3_video_info sam3_get_video_info(const std::string& video_path) {
     snprintf(cmd, sizeof(cmd),
              "ffprobe -v error -select_streams v:0 "
              "-show_entries stream=width,height,r_frame_rate,nb_frames "
-             "-of csv=p=0 \"%s\" 2>/dev/null",
+             "-of csv=p=0 \"%s\"",
              video_path.c_str());
     FILE* fp = popen(cmd, "r");
     if (!fp) return info;
