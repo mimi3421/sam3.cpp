@@ -12284,14 +12284,6 @@ bool sam3_save_mask(const sam3_mask& mask, const std::string& path) {
 sam3_image sam3_decode_video_frame(const std::string& video_path, int frame_index) {
     sam3_image img;
 
-    // Use ffmpeg to extract a single frame as raw RGB (frame-accurate)
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd),
-             "ffmpeg -nostdin -loglevel error -i \"%s\" "
-             "-vf \"select=eq(n\\,%d)\" -vsync vfr -frames:v 1 "
-             "-f rawvideo -pix_fmt rgb24 pipe:1",
-             video_path.c_str(), frame_index);
-
     // First, get dimensions
     char info_cmd[1024];
     snprintf(info_cmd, sizeof(info_cmd),
@@ -12311,6 +12303,14 @@ sam3_image sam3_decode_video_frame(const std::string& video_path, int frame_inde
     img.height = h;
     img.channels = 3;
     img.data.resize(w * h * 3);
+
+    // Use ffmpeg to extract a single frame as raw RGB (frame-accurate)
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+             "ffmpeg -nostdin -loglevel error -i \"%s\" "
+             "-vf \"select=eq(n\\,%d)\" -vsync vfr -frames:v 1 "
+             "-f rawvideo -pix_fmt rgb24 pipe:1",
+             video_path.c_str(), frame_index);
 
     fp = popen(cmd, "r");
     if (!fp) {
