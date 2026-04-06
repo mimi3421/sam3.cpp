@@ -50,7 +50,7 @@ jobs:
 
       - name: Install SDL (Windows)
         if: runner.os == 'Windows'
-        run:
+        run: |
           # SDL sdk
           vcpkg install sdl2:x64-windows
           vcpkg install sdl2:x64-windows-static
