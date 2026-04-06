@@ -142,6 +142,17 @@ jobs:
           
           # DLL dependencies
           Copy-Item "C:/vcpkg/installed/x64-windows/bin/SDL2.dll" staging/${{ matrix.artifact }}/bin/
+          Copy-Item "C:/Program Files (x86)/Windows Kits/10/Redist/ucrt/DLLs/api-ms-win-crt-locale-l1-1-0.dll" staging/${{ matrix.artifact }}/bin/
+          Copy-Item "C:/Program Files (x86)/Windows Kits/10/Redist/ucrt/DLLs/api-ms-win-crt-math-l1-1-0.dll" staging/${{ matrix.artifact }}/bin/
+          Copy-Item "C:/Program Files (x86)/Windows Kits/10/Redist/ucrt/DLLs/api-ms-win-crt-runtime-l1-1-0.dll" staging/${{ matrix.artifact }}/bin/
+          Copy-Item "C:/Program Files (x86)/Windows Kits/10/Redist/ucrt/DLLs/api-ms-win-crt-stdio-l1-1-0.dll" staging/${{ matrix.artifact }}/bin/
+          Copy-Item "C:/Program Files (x86)/Windows Kits/10/Redist/ucrt/DLLs/api-ms-win-crt-string-l1-1-0.dll" staging/${{ matrix.artifact }}/bin/
+          Copy-Item "C:/Program Files (x86)/Windows Kits/10/Redist/ucrt/DLLs/api-ms-win-crt-utility-l1-1-0.dll" staging/${{ matrix.artifact }}/bin/
+          Copy-Item "C:/Program Files (x86)/Windows Kits/10/Redist/ucrt/DLLs/api-ms-win-crt-convert-l1-1-0.dll" staging/${{ matrix.artifact }}/bin/
+          Copy-Item "C:/Program Files (x86)/Windows Kits/10/Redist/ucrt/DLLs/api-ms-win-crt-environment-l1-1-0.dll" staging/${{ matrix.artifact }}/bin/
+          Copy-Item "C:/Program Files (x86)/Windows Kits/10/Redist/ucrt/DLLs/api-ms-win-crt-filesystem-l1-1-0.dll" staging/${{ matrix.artifact }}/bin/
+          Copy-Item "C:/Program Files (x86)/Windows Kits/10/Redist/ucrt/DLLs/api-ms-win-crt-heap-l1-1-0.dll" staging/${{ matrix.artifact }}/bin/
+
 
 
           Compress-Archive -Path staging/${{ matrix.artifact }} -DestinationPath ${{ matrix.artifact }}.zip
