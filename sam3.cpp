@@ -12303,8 +12303,7 @@ sam3_image sam3_decode_video_frame(const std::string& video_path, int frame_inde
     img.height = h;
     img.channels = 3;
     img.data.resize(w * h * 3);
-    size_t expected_size = static_cast<size_t>(w) * h * 3;
-    //img.data.resize(expected_size);
+
 
     // Use ffmpeg to extract a single frame as raw RGB (frame-accurate)
     char cmd[1024];
