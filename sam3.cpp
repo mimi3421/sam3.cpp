@@ -12321,18 +12321,7 @@ sam3_image sam3_decode_video_frame(const std::string& video_path, int frame_inde
     }
    
     size_t nread = fread(img.data.data(), 1, img.data.size(), fp);
-   /* promise every byte read
-   size_t total_read = 0;
-   size_t nread = 0;
-   while (total_read < expected_size) {
-       nread = fread(img.data.data() + total_read, 1, 
-                            expected_size - total_read, fp);
-       if (nread == 0) {
-           // EOF 或错误，提前退出
-           break;
-       }
-       total_read += nread;
-   }*/
+
     pclose(fp);
     if (nread != img.data.size()) {
         img.data.clear();
