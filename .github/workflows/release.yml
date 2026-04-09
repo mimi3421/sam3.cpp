@@ -12,6 +12,8 @@ jobs:
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    env:
+      VULKAN_VERSION: 1.4.309.0
     strategy:
       fail-fast: false
       matrix:
@@ -60,7 +62,11 @@ jobs:
         id: get_vulkan
         if: ${{ matrix.build == 'vulkan-x64' }}
         run: |
-          vcpkg install vulkan-sdk-components
+          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/VulkanSDK-${env:VULKAN_VERSION}-Installer.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+          vcpkg install vulkan
 
       - name: Install SDL (Windows)
         if: runner.os == 'Windows'
