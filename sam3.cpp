@@ -3300,13 +3300,10 @@ std::shared_ptr<sam3_model> sam3_load_model(const sam3_params& params) {
                 if (++cnt > params.gpu_device) {
                     break;
                 }*/
-                dev = dev_cur;
+                fprintf(stderr, "%s: using Vulkan backend\n", __func__);
+                model->backend = ggml_backend_vk_init(i);
                 break;
             }
-        }
-        if (dev != nullptr) {
-            fprintf(stderr, "%s: using Vulkan backend\n", __func__);
-            model->backend = ggml_backend_vk_init(static_cast<size_t>(dev));
         }
     }
 #endif
