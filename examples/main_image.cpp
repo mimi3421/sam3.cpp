@@ -363,6 +363,7 @@ int main(int argc, char** argv) {
     app_state app;
     app.params.n_threads = 4;
     app.params.use_gpu   = true;
+    app.params.gpu_device   = 0;
 
     const char* image_path = nullptr;
 
@@ -374,12 +375,14 @@ int main(int argc, char** argv) {
             image_path = argv[++i];
         } else if (strcmp(argv[i], "--threads") == 0 && i+1 < argc) {
             app.params.n_threads = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--gpu_device") == 0 && i+1 < argc) {
+            app.params.gpu_device = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--no-gpu") == 0) {
             app.params.use_gpu = false;
         } else if (strcmp(argv[i], "--help") == 0) {
             fprintf(stderr,
                 "Usage: %s --model <path.ggml> [--image <path>]\n"
-                "          [--threads N] [--no-gpu]\n", argv[0]);
+                "          [--threads N] [--gpu_device N] [--no-gpu]\n", argv[0]);
             return 0;
         }
     }
