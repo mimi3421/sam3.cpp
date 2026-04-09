@@ -16,7 +16,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: Windows x86_64 vulkan
+            os: windows-latest
+            build: vulkan-x64
+            artifact: sam3-win-x86_64-vulkan
+            cmake_args: "-DGGML_METAL=OFF -DSAM3_METAL=OFF -DGGML_VULKAN=ON -DSAM3_VULKAN=ON -DBUILD_SHARED_LIBS=OFF -A x64"
+            build_args: "--config Release"
+            ext: zip
           - name: Windows x86_64
+            build: cpu
             os: windows-latest
             artifact: sam3-win-x86_64
             cmake_args: "-DGGML_METAL=OFF -DSAM3_METAL=OFF -DBUILD_SHARED_LIBS=OFF -A x64"
@@ -47,6 +55,12 @@ jobs:
       #  run:
       #    # opengl sdk
       #    vcpkg install opengl
+      
+      - name: Install Vulkan SDK
+        id: get_vulkan
+        if: ${{ matrix.build == 'vulkan-x64' }}
+        run: |
+          vcpkg install vulkan-sdk-components
 
       - name: Install SDL (Windows)
         if: runner.os == 'Windows'
