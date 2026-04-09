@@ -371,6 +371,7 @@ int main(int argc, char** argv) {
     vapp_state app;
     app.params.n_threads = 4;
     app.params.use_gpu   = true;
+    app.params.gpu_device   = 0;
 
     // Parse args
     for (int i = 1; i < argc; ++i) {
@@ -380,6 +381,8 @@ int main(int argc, char** argv) {
             app.video_path = argv[++i];
         } else if (strcmp(argv[i], "--threads") == 0 && i+1 < argc) {
             app.params.n_threads = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--gpu_device") == 0 && i+1 < argc) {
+            app.params.gpu_device = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--no-gpu") == 0) {
             app.params.use_gpu = false;
         } else if (strcmp(argv[i], "--encode-img-size") == 0 && i+1 < argc) {
@@ -387,7 +390,7 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--help") == 0) {
             fprintf(stderr,
                 "Usage: %s --model <path.ggml> --video <path>\n"
-                "          [--threads N] [--no-gpu] [--encode-img-size N]\n", argv[0]);
+                "          [--threads N] [--gpu_device N] [--no-gpu] [--encode-img-size N]\n", argv[0]);
             return 0;
         }
     }
