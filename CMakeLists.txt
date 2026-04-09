@@ -16,6 +16,11 @@ if(APPLE AND SAM3_METAL)
     set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
 endif()
 
+option(SAM3_VULKAN "Enable Vulkan backend" OFF)
+if(SAM3_VULKAN)
+    set(GGML_VULKAN        ON CACHE BOOL "" FORCE)
+endif()
+
 add_subdirectory(ggml)
 
 # sam3 static library
