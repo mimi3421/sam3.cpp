@@ -168,12 +168,25 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          
+      - name: Determine tag name
+        id: tag
+        shell: bash
+        run: |
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          SHORT_HASH="$(git rev-parse --short=7 HEAD)"
+          if [[ "${{ github.ref_name }}" == "main" ]]; then
+            echo "name=b${BUILD_NUMBER}" >> $GITHUB_OUTPUT
+          else
+            SAFE_NAME=$(echo "${{ github.ref_name }}" | tr '/' '-')
+            echo "name=${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: sam3.cpp ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}-${{ steps.tag.outputs.name }}
+          name: sam3.cpp ${{ github.ref_name }}-${{ steps.tag.outputs.name }}
           draft: false
           prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
           generate_release_notes: true
