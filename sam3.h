@@ -97,6 +97,7 @@ struct sam3_params {
     std::string model_path;
     int         n_threads       = 4;
     bool        use_gpu         = true;
+    bool        gpu_device      = 0;
     int         seed            = 42;
     int         encode_img_size = 0;  // 0 = model default; override input resolution
 };
