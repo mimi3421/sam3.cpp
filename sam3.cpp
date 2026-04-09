@@ -3286,23 +3286,27 @@ std::shared_ptr<sam3_model> sam3_load_model(const sam3_params& params) {
     ggml_backend_dev_t dev = nullptr;
     int cnt = 0;
     if (params.use_gpu) {
-        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        for (size_t i = 0; i < ggml_backend_dev_count() && i < params.gpu_device + 1; ++i) {
             ggml_backend_dev_t dev_cur = ggml_backend_dev_get(i);
             enum ggml_backend_dev_type dev_type = ggml_backend_dev_type(dev_cur);
             const char * dev_name = ggml_backend_dev_name(dev_cur);
             fprintf(stderr, "%s: device %zu: %s (type: %d)\n", __func__, i, dev_name, dev_type);
             if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
                 fprintf(stderr, "%s: found GPU device %zu: %s (type: %d, cnt: %d)\n", __func__, i, dev_name, dev_type, cnt);
-                /*if (cnt == params.gpu_device) {
+                /*
+                if (cnt == params.gpu_device) {
                     dev = dev_cur;
                 }
 
                 if (++cnt > params.gpu_device) {
                     break;
-                }*/
-                fprintf(stderr, "%s: using Vulkan backend\n", __func__);
-                model->backend = ggml_backend_vk_init(i);
-                break;
+                }
+                */
+                if (i == params.gpu_device) {
+                    fprintf(stderr, "%s: using Vulkan backend\n", __func__);
+                    model->backend = ggml_backend_vk_init(i);
+                    break;
+                }
             }
         }
     }
