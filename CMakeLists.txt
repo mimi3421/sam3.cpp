@@ -18,6 +18,7 @@ endif()
 
 option(SAM3_VULKAN "Enable Vulkan backend" OFF)
 if(SAM3_VULKAN)
+    find_package(Vulkan REQUIRED)
     set(GGML_VULKAN        ON CACHE BOOL "" FORCE)
 endif()
 
@@ -29,8 +30,12 @@ target_include_directories(sam3 PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/stb
 )
+if(SAM3_VULKAN)
+    target_link_libraries(sam3 PUBLIC Vulkan::Vulkan)
+endif()
 target_link_libraries(sam3 PUBLIC ggml)
 target_compile_features(sam3 PUBLIC cxx_std_14)
+
 
 # Examples (only when top-level)
 option(SAM3_BUILD_EXAMPLES "Build example executables" ON)
