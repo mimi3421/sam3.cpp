@@ -26,6 +26,7 @@
 #include <fstream>
 #include <vector>
 #include <cstdint>
+#include <map>
 
 // 统计信息
 struct TensorStats {
@@ -73,10 +74,10 @@ TensorStats compute_stats(const std::vector<float>& ref, const std::vector<float
 void print_stats(const TensorStats& stats, const char* name) {
     fprintf(stdout, "=== %s ===\n", name);
     fprintf(stdout, "Count: %zu\n", stats.count);
-    fprintf(stdout, "Max error:  %.6e\n", stats.max_error);
-    fprintf(stdout, "Min error:  %.6e\n", stats.min_error);
-    fprintf(stdout, "Mean error:  %.6e\n", stats.mean_error);
-    fprintf(stdout, "Std error:  %.6e\n", stats.std_error);
+    fprintf(stdout, "Max error: %.6e\n", stats.max_error);
+    fprintf(stdout, "Min error: %.6e\n", stats.min_error);
+    fprintf(stdout, "Mean error: %.6e\n", stats.mean_error);
+    fprintf(stdout, "Std error: %.6e\n", stats.std_error);
     fprintf(stdout, "\n");
 }
 
@@ -97,13 +98,13 @@ void compute_rope_freqs(std::vector<float>& out, int dim, int N, float theta = 1
         float t_x = (float)(idx % (int)std::sqrt(N)) * scale_pos;
         float t_y = (float)(idx / (int)std::sqrt(N)) * scale_pos;
         
-        // X 频率 → 前 16 个复数值
+        // X 频率 -> 前 16 个复数值
         for (int i = 0; i < half_dim; ++i) {
             float angle_x = t_x * freqs[i];
             out[idx * dim + i * 2 + 0] = std::cos(angle_x);
             out[idx * dim + i * 2 + 1] = std::sin(angle_x);
         }
-        // Y 频率 → 后 16 个复数值
+        // Y 频率 -> 后 16 个复数值
         for (int i = 0; i < half_dim; ++i) {
             float angle_y = t_y * freqs[i];
             out[idx * dim + half_dim * 2 + i * 2 + 0] = std::cos(angle_y);
@@ -183,22 +184,27 @@ bool test_rope(ggml_backend_t backend, const std::string& backend_name,
                                    ggml_mul(ctx, K_im, cos_f));
     
     // 交错合并
-    auto* Q_out = ggml_concat(ctx, Q_out_re, Q_out_im, 0);
-    auto* K_out = ggml_concat(ctx, K_out_re, K_out_im, 0);
+    auto* Q_out_temp = ggml_concat(ctx, Q_out_re, Q_out_im, 0);
+    auto* K_out_temp = ggml_concat(ctx, K_out_re, K_out_im, 0);
     
     // Reshape 回 [head_dim, N, nheads_B]
-    Q_out = ggml_reshape_3d(ctx, ggml_cont(ctx, Q_out), head_dim, N, nheads_B);
-    K_out = ggml_reshape_3d(ctx, ggml_cont(ctx, K_out), head_dim, N, nheads_B);
+    Q_out_temp = ggml_reshape_3d(ctx, Q_out_temp, head_dim, N, nheads_B);
+    K_out_temp = ggml_reshape_3d(ctx, K_out_temp, head_dim, N, nheads_B);
+    
+    Q_out_temp = ggml_cont(ctx, Q_out_temp);
+    K_out_temp = ggml_cont(ctx, K_out_temp);
+    
+    // 设置输出张量
+    ggml_set_name(Q_out_temp, "Q_output");
+    ggml_set_output(Q_out_temp);
+    
+    ggml_set_name(K_out_temp, "K_output");
+    ggml_set_output(K_out_temp);
     
     // 构建和分配 graph
-    ggml_set_name(Q_out, "Q_output");
-    ggml_set_name(K_out, "K_output");
-    ggml_set_output(Q_out);
-    ggml_set_output(K_out);
-    
     auto* graph = ggml_new_graph_custom(ctx, 4096, false);
-    ggml_build_forward_expand(graph, Q_out);
-    ggml_build_forward_expand(graph, K_out);
+    ggml_build_forward_expand(graph, Q_out_temp);
+    ggml_build_forward_expand(graph, K_out_temp);
     
     auto* galloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
     if (!ggml_gallocr_reserve(galloc, graph) ||
@@ -210,9 +216,12 @@ bool test_rope(ggml_backend_t backend, const std::string& backend_name,
     }
     
     // 设置输入
-    ggml_backend_tensor_set(Q_tensor, Q_input.data(), Q_input.size() * sizeof(float));
-    ggml_backend_tensor_set(K_tensor, K_input.data(), K_input.size() * sizeof(float));
-    ggml_backend_tensor_set(freqs_tensor, freqs.data(), freqs.size() * sizeof(float));
+    ggml_backend_tensor_set(Q_tensor, Q_input.data(), 
+                             (ggml_backend_buffer_type)0, Q_input.size() * sizeof(float));
+    ggml_backend_tensor_set(K_tensor, K_input.data(), 
+                             (ggml_backend_buffer_type)0, K_input.size() * sizeof(float));
+    ggml_backend_tensor_set(freqs_tensor, freqs.data(), 
+                             (ggml_backend_buffer_type)0, freqs.size() * sizeof(float));
     
     // 计算
     auto t0 = std::chrono::high_resolution_clock::now();
@@ -233,8 +242,10 @@ bool test_rope(ggml_backend_t backend, const std::string& backend_name,
     Q_out.resize(Q_input.size());
     K_out.resize(K_input.size());
     
-    ggml_backend_tensor_get(Q_out, Q_out.data(), 0, Q_out.size() * sizeof(float));
-    ggml_backend_tensor_get(K_out, K_out.data(), 0, K_out.size() * sizeof(float));
+    ggml_backend_tensor_get(Q_out_temp, Q_out.data(), 
+                             (ggml_backend_buffer_type)0, Q_out.size() * sizeof(float));
+    ggml_backend_tensor_get(K_out_temp, K_out.data(), 
+                             (ggml_backend_buffer_type)0, K_out.size() * sizeof(float));
     
     ggml_gallocr_free(galloc);
     ggml_free(ctx);
@@ -245,13 +256,53 @@ bool test_rope(ggml_backend_t backend, const std::string& backend_name,
     return true;
 }
 
+// 初始化后端
+bool init_backend(const std::string& backend_name, ggml_backend_t& backend) {
+    if (backend_name == "cpu") {
+        backend = ggml_backend_cpu_init();
+    }
+#ifdef GGML_USE_METAL
+    else if (backend_name == "metal") {
+        fprintf(stdout, "Initializing Metal backend...\n");
+        backend = ggml_backend_metal_init();
+    }
+#endif
+#ifdef GGML_USE_VULKAN
+    else if (backend_name == "vulkan") {
+        fprintf(stdout, "Initializing Vulkan backend...\n");
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+            enum ggml_backend_dev_type dev_type = ggml_backend_dev_type(dev);
+            if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || 
+                dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                const char* dev_name = ggml_backend_dev_name(dev);
+                fprintf(stdout, "Using device: %s\n", dev_name);
+                backend = ggml_backend_vk_init(i);
+                break;
+            }
+        }
+    }
+#endif
+    else {
+        fprintf(stderr, "Unknown backend: %s\n", backend_name.c_str());
+        return false;
+    }
+    
+    if (!backend) {
+        fprintf(stderr, "Failed to initialize backend: %s\n", backend_name.c_str());
+        return false;
+    }
+    
+    return true;
+}
+
 // 打印帮助信息
 void print_help(const char* argv0) {
-    fprintf(stdout, "Usage: %s [options]\n\n", argv0);
+    fprintf(stdout, "Usage: %s [options]\n", argv0);
     fprintf(stdout, "Options:\n");
     fprintf(stdout, "  --backend <type>  Backend to use (cpu|metal|vulkan)\n");
-    fprintf(stdout, "  --output <file>    Output file for results\n");
-    fprintf(stdout, "  --compare <b1> <b2>  Compare two backends\n");
+    fprintf(stdout, "  --output <file>   Output file for results\n");
+    fprintf(stdout, "  --compare <b1> <b2> Compare two backends\n");
     fprintf(stdout, "  --help             Show this help message\n");
 }
 
@@ -305,51 +356,8 @@ int main(int argc, char* argv[]) {
     compute_rope_freqs(freqs, head_dim, N);
     
     // 初始化后端
-    std::shared_ptr<sam3_model> model;
     ggml_backend_t backend1_ptr = nullptr;
     ggml_backend_t backend2_ptr = nullptr;
-    
-    auto init_backend = [&](const std::string& backend, ggml_backend_t& out) -> bool {
-        sam3_params params;
-        params.use_gpu = true;
-        params.model_path = "dummy.ggml";  // 不需要真实的模型
-        
-        if (backend == "cpu") {
-            out = ggml_backend_cpu_init();
-        }
-#ifdef GGML_USE_METAL
-        else if (backend == "metal") {
-            out = ggml_backend_metal_init();
-        }
-#endif
-#ifdef GGML_USE_VULKAN
-        else if (backend == "vulkan") {
-            fprintf(stdout, "Initializing Vulkan backend...\n");
-            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-                enum ggml_backend_dev_type dev_type = ggml_backend_dev_type(dev);
-                if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || 
-                    dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
-                    const char* dev_name = ggml_backend_dev_name(dev);
-                    fprintf(stdout, "Using device: %s\n", dev_name);
-                    out = ggml_backend_vk_init(i);
-                    break;
-                }
-            }
-        }
-#endif
-        else {
-            fprintf(stderr, "Unknown backend: %s\n", backend.c_str());
-            return false;
-        }
-        
-        if (!out) {
-            fprintf(stderr, "Failed to initialize backend: %s\n", backend.c_str());
-            return false;
-        }
-        
-        return true;
-    };
     
     if (!init_backend(backend1, backend1_ptr)) {
         return 1;
