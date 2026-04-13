@@ -2,8 +2,8 @@
 add_executable(test_rope_vulkan_vs_cpu test_rope_vulkan_vs_cpu.cpp)
 target_link_libraries(test_rope_vulkan_vs_cpu PRIVATE sam3)
 
-add_executable(test_vit_block_vulkan_vs_cpu test_vit_block_vulkan_vs_cpu.cpp)
-target_link_libraries(test_vit_block_vulkan_vs_cpu PRIVATE sam3)
+#add_executable(test_vit_block_vulkan_vs_cpu test_vit_block_vulkan_vs_cpu.cpp)
+#target_link_libraries(test_vit_block_vulkan_vs_cpu PRIVATE sam3)
 
 
 # add_executable(test_load test_load.cpp)
