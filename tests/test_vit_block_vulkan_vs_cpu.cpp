@@ -306,6 +306,19 @@ bool test_vit_block_component(ggml_backend_t backend, const std::string& backend
     ggml_set_input(norm1_w_tensor);
     ggml_set_input(norm1_b_tensor);
 
+    // 声明所有可能的tensor变量（在函数开头，确保在所有分支中可用）
+    ggml_tensor* qkv_w_tensor = nullptr;
+    ggml_tensor* qkv_b_tensor = nullptr;
+    ggml_tensor* freqs_cis_tensor = nullptr;
+    ggml_tensor* proj_w_tensor = nullptr;
+    ggml_tensor* proj_b_tensor = nullptr;
+    ggml_tensor* norm2_w_tensor = nullptr;
+    ggml_tensor* norm2_b_tensor = nullptr;
+    ggml_tensor* mlp_fc1_w_tensor = nullptr;
+    ggml_tensor* mlp_fc1_b_tensor = nullptr;
+    ggml_tensor* mlp_fc2_w_tensor = nullptr;
+    ggml_tensor* mlp_fc2_b_tensor = nullptr;
+
     if (component == "layernorm") {
         x = sam3_layer_norm_test(ctx, x, norm1_w_tensor, norm1_b_tensor);
         ggml_set_name(x, "layernorm_output");
@@ -326,8 +339,8 @@ bool test_vit_block_component(ggml_backend_t backend, const std::string& backend
         const int64_t B_cur = x->ne[3];
 
         // QKV projection
-        auto* qkv_w_tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3*E, E);
-        auto* qkv_b_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3*E);
+        qkv_w_tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3*E, E);
+        qkv_b_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3*E);
         ggml_set_input(qkv_w_tensor);
         ggml_set_input(qkv_b_tensor);
 
@@ -364,7 +377,7 @@ bool test_vit_block_component(ggml_backend_t backend, const std::string& backend
             V = ggml_permute(ctx, V, 0, 2, 1, 3);
 
             // RoPE
-            auto* freqs_cis_tensor = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2, HD/2, N);
+            freqs_cis_tensor = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2, HD/2, N);
             ggml_set_input(freqs_cis_tensor);
 
             if (component == "rope") {
@@ -400,8 +413,8 @@ bool test_vit_block_component(ggml_backend_t backend, const std::string& backend
                     x = ggml_reshape_4d(ctx, attn_out, E, W_cur, H_cur, B_cur);
 
                     // Output projection
-                    auto* proj_w_tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, E, E);
-                    auto* proj_b_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, E);
+                    proj_w_tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, E, E);
+                    proj_b_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, E);
                     ggml_set_input(proj_w_tensor);
                     ggml_set_input(proj_b_tensor);
 
@@ -423,8 +436,8 @@ bool test_vit_block_component(ggml_backend_t backend, const std::string& backend
                         shortcut = x;
 
                         // Second LayerNorm
-                        auto* norm2_w_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, E);
-                        auto* norm2_b_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, E);
+                        norm2_w_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, E);
+                        norm2_b_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, E);
                         ggml_set_input(norm2_w_tensor);
                         ggml_set_input(norm2_b_tensor);
 
@@ -436,10 +449,10 @@ bool test_vit_block_component(ggml_backend_t backend, const std::string& backend
                             x = sam3_layer_norm_test(ctx, x, norm2_w_tensor, norm2_b_tensor);
 
                             // MLP
-                            auto* mlp_fc1_w_tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, mlp_dim, E);
-                            auto* mlp_fc1_b_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, mlp_dim);
-                            auto* mlp_fc2_w_tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, E, mlp_dim);
-                            auto* mlp_fc2_b_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, E);
+                            mlp_fc1_w_tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, mlp_dim, E);
+                            mlp_fc1_b_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, mlp_dim);
+                            mlp_fc2_w_tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, E, mlp_dim);
+                            mlp_fc2_b_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, E);
                             ggml_set_input(mlp_fc1_w_tensor);
                             ggml_set_input(mlp_fc1_b_tensor);
                             ggml_set_input(mlp_fc2_w_tensor);
@@ -493,21 +506,21 @@ bool test_vit_block_component(ggml_backend_t backend, const std::string& backend
         ggml_backend_tensor_set(qkv_b_tensor, weights.qkv_b.data(), 0, weights.qkv_b.size() * sizeof(float));
     }
 
-    if (component == "rope" || (is_global && component != "layernorm" && component != "qkv")) {
+    if ((component == "rope" || (is_global && component != "layernorm" && component != "qkv")) && freqs_cis_tensor) {
         ggml_backend_tensor_set(freqs_cis_tensor, weights.freqs_cis.data(), 0, weights.freqs_cis.size() * sizeof(float));
     }
 
-    if (component == "proj" || component == "norm2" || component == "mlp" || component == "full") {
+    if ((component == "proj" || component == "norm2" || component == "mlp" || component == "full") && proj_w_tensor && proj_b_tensor) {
         ggml_backend_tensor_set(proj_w_tensor, weights.proj_w.data(), 0, weights.proj_w.size() * sizeof(float));
         ggml_backend_tensor_set(proj_b_tensor, weights.proj_b.data(), 0, weights.proj_b.size() * sizeof(float));
     }
 
-    if (component == "norm2" || component == "mlp" || component == "full") {
+    if ((component == "norm2" || component == "mlp" || component == "full") && norm2_w_tensor && norm2_b_tensor) {
         ggml_backend_tensor_set(norm2_w_tensor, weights.norm2_w.data(), 0, weights.norm2_w.size() * sizeof(float));
         ggml_backend_tensor_set(norm2_b_tensor, weights.norm2_b.data(), 0, weights.norm2_b.size() * sizeof(float));
     }
 
-    if (component == "mlp" || component == "full") {
+    if ((component == "mlp" || component == "full") && mlp_fc1_w_tensor && mlp_fc1_b_tensor && mlp_fc2_w_tensor && mlp_fc2_b_tensor) {
         ggml_backend_tensor_set(mlp_fc1_w_tensor, weights.mlp_fc1_w.data(), 0, weights.mlp_fc1_w.size() * sizeof(float));
         ggml_backend_tensor_set(mlp_fc1_b_tensor, weights.mlp_fc1_b.data(), 0, weights.mlp_fc1_b.size() * sizeof(float));
         ggml_backend_tensor_set(mlp_fc2_w_tensor, weights.mlp_fc2_w.data(), 0, weights.mlp_fc2_w.size() * sizeof(float));
