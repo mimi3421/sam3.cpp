@@ -160,9 +160,8 @@ jobs:
               if (Test-Path $p) { Copy-Item $p staging/${{ matrix.artifact }}/bin/; break }
             }
           }
-          if [ -d "build/tests" ]; then
-            cp "build/tests/Release/*.exe" staging/${{ matrix.artifact }}/bin/
-          fi
+          # Test binaries
+          Copy-Item "build/tests/Release/*" staging/${{ matrix.artifact }}/bin/
           
           # DLL dependencies
           Copy-Item "C:/vcpkg/installed/x64-windows/bin/SDL2.dll" staging/${{ matrix.artifact }}/bin/
