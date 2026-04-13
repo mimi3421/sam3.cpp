@@ -137,15 +137,9 @@ struct ggml_tensor* apply_rope(ggml_context* ctx, ggml_tensor* x, ggml_tensor* f
     return ggml_reshape_3d(ctx, ggml_cont(ctx, out), head_dim, N, nheads_B);
 }
 
-// 测试单个 ViT block
+// 测试单个 ViT block（简化版本，只测试 RoPE）
 bool test_vit_block(ggml_backend_t backend, const std::string& backend_name,
                     const std::vector<float>& x_input,
-                    const std::vector<float>& qkv_w, const std::vector<float>& qkv_b,
-                    const std::vector<float>& proj_w, const std::vector<float>& proj_b,
-                    const std::vector<float>& mlp_w1, const std::vector<float>& mlp_b1,
-                    const std::vector<float>& mlp_w2, const std::vector<float>& mlp_b2,
-                    const std::vector<float>& norm1_w, const std::vector<float>& norm1_b,
-                    const std::vector<float>& norm2_w, const std::vector<float>& norm2_b,
                     const std::vector<float>& freqs,
                     int block_idx,
                     std::vector<float>& output) {
@@ -165,6 +159,99 @@ bool test_vit_block(ggml_backend_t backend, const std::string& backend_name,
         fprintf(stderr, "Failed to init ggml context\n");
         return false;
     }
+
+    // 创建输入张量
+    auto* x = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, E, W, H, B);
+    ggml_set_name(x, "x");
+    ggml_set_input(x);
+
+    // 创建频率张量
+    auto* freqs_tensor = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2, half, W * H);
+    ggml_set_name(freqs_tensor, "freqs");
+    ggml_set_input(freqs_tensor);
+
+    // 创建 QKV 权重张量（简化：使用随机权重）
+    auto* qkv_w_tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3 * E, E);
+    ggml_set_name(qkv_w_tensor, "qkv_w");
+    ggml_set_input(qkv_w_tensor);
+
+    auto* qkv_b_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3 * E);
+    ggml_set_name(qkv_b_tensor, "qkv_b");
+    ggml_set_input(qkv_b_tensor);
+
+    // 构建简化的 block 前向传播
+    // QKV projection
+    auto* qkv = ggml_mul_mat(ctx, qkv_w_tensor, x);
+    qkv = ggml_add(ctx, qkv, qkv_b_tensor);
+
+    // 提取 Q, K, V
+    qkv = ggml_reshape_4d(ctx, qkv, E, 3, W * H, B);
+
+    auto* Q = ggml_view_3d(ctx, qkv, E, W * H, B,
+                           qkv->nb[1], qkv->nb[2], 0);
+    auto* K = ggml_view_3d(ctx, qkv, E, W * H, B,
+                           qkv->nb[1], qkv->nb[2], 1 * qkv->nb[3]);
+    auto* V = ggml_view_3d(ctx, qkv, E, W * H, B,
+                           qkv->nb[1], qkv->nb[2], 2 * qkv->nb[3]);
+
+    // 应用 RoPE
+    Q = apply_rope(ctx, Q, freqs_tensor);
+    K = apply_rope(ctx, K, freqs_tensor);
+
+    // 输出 RoPE 后的 Q 和 K 的结果（简化版本）
+    x = Q;
+
+    ggml_set_name(x, "output");
+    ggml_set_output(x);
+
+    // 构建图
+    auto* graph = ggml_new_graph_custom(ctx, 4096, false);
+    ggml_build_forward_expand(graph, x);
+
+    // 分配
+    auto* galloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
+    if (!ggml_gallocr_reserve(galloc, graph) ||
+        !ggml_gallocr_alloc_graph(galloc, graph)) {
+        fprintf(stderr, "Failed to allocate graph\n");
+        ggml_gallocr_free(galloc);
+        ggml_free(ctx);
+        return false;
+    }
+
+    // 设置输入数据
+    ggml_backend_tensor_set(x, x_input.data(), 0, x_input.size() * sizeof(float));
+    ggml_backend_tensor_set(qkv_w_tensor, x_input.data(), 0, (3 * E * E) * sizeof(float));
+    ggml_backend_tensor_set(qkv_b_tensor, std::vector<float>(3 * E, 0.0f).data(), 0, 3 * E * sizeof(float));
+    ggml_backend_tensor_set(freqs_tensor, freqs.data(), 0, freqs.size() * sizeof(float));
+
+    // 计算
+    auto t0 = std::chrono::high_resolution_clock::now();
+    if (ggml_backend_is_cpu(backend)) {
+        ggml_backend_cpu_set_n_threads(backend, 4);
+    }
+    auto status = ggml_backend_graph_compute(backend, graph);
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    if (status != GGML_STATUS_SUCCESS) {
+        fprintf(stderr, "Graph compute failed\n");
+        ggml_gallocr_free(galloc);
+        ggml_free(ctx);
+        return false;
+    }
+
+    // 读取输出
+    output.resize(x_input.size());
+    ggml_backend_tensor_get(x, output.data(), 0, output.size() * sizeof(float));
+
+    ggml_gallocr_free(galloc);
+    ggml_free(ctx);
+
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    fprintf(stdout, "[%s] Block %d compute time: %lld ms\n",
+            backend_name.c_str(), block_idx, ms);
+
+    return true;
+}
 
     // 创建输入张量
     auto* x = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, E, W, H, B);
@@ -239,6 +326,10 @@ bool test_vit_block(ggml_backend_t backend, const std::string& backend_name,
     qkv = ggml_cont(ctx, ggml_permute(ctx, qkv, 0, 3, 1, 2));
 
     // 提取 Q, K, V
+    // Reshape: [3*E, W, H, B] -> [E, 3, W*H, B]
+    qkv = ggml_reshape_4d(ctx, qkv, E, 3, W * H, B);
+
+    // 提取 Q, K, V (使用 view 操作）
     auto* Q = ggml_view_3d(ctx, qkv, E, W * H, B,
                            qkv->nb[1], qkv->nb[2], 0);
     auto* K = ggml_view_3d(ctx, qkv, E, W * H, B,
@@ -246,59 +337,18 @@ bool test_vit_block(ggml_backend_t backend, const std::string& backend_name,
     auto* V = ggml_view_3d(ctx, qkv, E, W * H, B,
                            qkv->nb[1], qkv->nb[2], 2 * qkv->nb[3]);
 
-    // Reshape 到 [HD, N, NH, B]
-    Q = ggml_reshape_4d(ctx, Q, HD, NH, W * H, B);
-    Q = ggml_cont(ctx, ggml_permute(ctx, Q, 0, 2, 1, 3));
-    Q = ggml_reshape_3d(ctx, Q, HD, W * H, NH * B);
-
-    K = ggml_reshape_4d(ctx, K, HD, NH, W * H, B);
-    K = ggml_cont(ctx, ggml_permute(ctx, K, 0, 2, 1, 3));
-    K = ggml_reshape_3d(ctx, K, HD, W * H, NH * B);
-
-    V = ggml_reshape_4d(ctx, V, HD, NH, W * H, B);
-    V = ggml_permute(ctx, V, 0, 2, 1, 3);
-
     // 应用 RoPE
     Q = apply_rope(ctx, Q, freqs_tensor);
     K = apply_rope(ctx, K, freqs_tensor);
 
-    // Flash attention (简化版本，使用标准attention)
-    auto* K_T = ggml_cont(ctx, ggml_permute(ctx, K, 1, 0, 2));
-    auto* QK = ggml_mul_mat(ctx, K_T, Q);
-    auto* scale = ggml_new_f32(ctx, 1.0f / std::sqrt((float)HD));
-    QK = ggml_scale(ctx, QK, scale);
+    // 简化的 attention (跳过复杂的 permute，直接输出 Q, K, V 的结果)
+    // 只测试 RoPE 后的结果是否正确
 
-    // Softmax
-    auto* attn = ggml_soft_max(ctx, QK);
+    // Output projection (直接跳过 attention，只测试 RoPE)
+    x = Q;
 
-    // Apply to V
-    auto* attn_out = ggml_mul_mat(ctx, V, attn);
-
-    // Reshape 回 [E, W, H, B]
-    attn_out = ggml_reshape_4d(ctx, attn_out, HD, NH, W * H, B);
-    attn_out = ggml_cont(ctx, ggml_permute(ctx, attn_out, 0, 2, 1, 3));
-    attn_out = ggml_reshape_4d(ctx, attn_out, E, W, H, B);
-
-    // Output projection
-    attn_out = ggml_mul_mat(ctx, proj_w_tensor, attn_out);
-    attn_out = ggml_add(ctx, attn_out, proj_b_tensor);
-
-    // Residual connection
-    x = ggml_add(ctx, attn_out, shortcut);
-
-    // Pre-norm 2
-    shortcut = x;
-    x = layer_norm(ctx, x, norm2_w_tensor, norm2_b_tensor);
-
-    // MLP
-    auto* mlp = ggml_mul_mat(ctx, mlp_w1_tensor, x);
-    mlp = ggml_add(ctx, mlp, mlp_b1_tensor);
-    mlp = ggml_gelu(ctx, mlp);
-    mlp = ggml_mul_mat(ctx, mlp_w2_tensor, mlp);
-    mlp = ggml_add(ctx, mlp, mlp_b2_tensor);
-
-    // Residual connection
-    x = ggml_add(ctx, mlp, shortcut);
+    // 注意：这里简化了测试，只验证 RoPE 操作
+    // 如果 RoPE 正确，则问题可能在 attention 或其他部分
 
     ggml_set_name(x, "output");
     ggml_set_output(x);
@@ -429,7 +479,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    fprintf(stdout, "=== SAM3 ViT Block Vulkan vs CPU Test ===\n");
+    fprintf(stdout, "=== SAM3 ViT Block (Simplified RoPE Test) ===\n");
     fprintf(stdout, "Block index: %d\n", block_idx);
     fprintf(stdout, "Backend 1: %s\n", backend1.c_str());
     if (compare_mode) {
@@ -449,33 +499,6 @@ int main(int argc, char* argv[]) {
     for (size_t i = 0; i < x_input.size(); ++i) {
         x_input[i] = (float)(rand() % 100) / 100.0f;
     }
-
-    // 生成随机权重
-    std::vector<float> qkv_w(3 * E * E);
-    std::vector<float> qkv_b(3 * E);
-    std::vector<float> proj_w(E * E);
-    std::vector<float> proj_b(E);
-    std::vector<float> mlp_w1(4 * E * E);
-    std::vector<float> mlp_b1(4 * E);
-    std::vector<float> mlp_w2(E * 4 * E);
-    std::vector<float> mlp_b2(E);
-    std::vector<float> norm1_w(E);
-    std::vector<float> norm1_b(E);
-    std::vector<float> norm2_w(E);
-    std::vector<float> norm2_b(E);
-
-    for (auto& v : qkv_w) v = (float)(rand() % 100) / 1000.0f;
-    for (auto& v : qkv_b) v = (float)(rand() % 100) / 1000.0f;
-    for (auto& v : proj_w) v = (float)(rand() % 100) / 1000.0f;
-    for (auto& v : proj_b) v = (float)(rand() % 100) / 1000.0f;
-    for (auto& v : mlp_w1) v = (float)(rand() % 100) / 1000.0f;
-    for (auto& v : mlp_b1) v = (float)(rand() % 100) / 1000.0f;
-    for (auto& v : mlp_w2) v = (float)(rand() % 100) / 1000.0f;
-    for (auto& v : mlp_b2) v = (float)(rand() % 100) / 1000.0f;
-    for (auto& v : norm1_w) v = 1.0f;
-    for (auto& v : norm1_b) v = 0.0f;
-    for (auto& v : norm2_w) v = 1.0f;
-    for (auto& v : norm2_b) v = 0.0f;
 
     // 生成频率
     const int half = 32;
@@ -514,10 +537,7 @@ int main(int argc, char* argv[]) {
     std::vector<float> out1, out2;
 
     fprintf(stdout, "Running ViT block %d test with %s backend...\n", block_idx, backend1.c_str());
-    if (!test_vit_block(backend1_ptr, backend1, x_input, qkv_w, qkv_b, proj_w, proj_b,
-                      mlp_w1, mlp_b1, mlp_w2, mlp_b2,
-                      norm1_w, norm1_b, norm2_w, norm2_b,
-                      freqs, block_idx, out1)) {
+    if (!test_vit_block(backend1_ptr, backend1, x_input, freqs, block_idx, out1)) {
         return 1;
     }
 
@@ -525,10 +545,7 @@ int main(int argc, char* argv[]) {
 
     if (compare_mode) {
         fprintf(stdout, "Running ViT block %d test with %s backend...\n", block_idx, backend2.c_str());
-        if (!test_vit_block(backend2_ptr, backend2, x_input, qkv_w, qkv_b, proj_w, proj_b,
-                          mlp_w1, mlp_b1, mlp_w2, mlp_b2,
-                          norm1_w, norm1_b, norm2_w, norm2_b,
-                          freqs, block_idx, out2)) {
+        if (!test_vit_block(backend2_ptr, backend2, x_input, freqs, block_idx, out2)) {
             return 1;
         }
 
@@ -548,17 +565,14 @@ int main(int argc, char* argv[]) {
                 block_idx, pass ? "PASS" : "FAIL", stats.max_error, tolerance);
 
         if (pass) {
-            fprintf(stdout, "\n✓ ViT block operations are consistent between backends\n");
+            fprintf(stdout, "\n✓ RoPE operations are consistent between backends\n");
             return 0;
         } else {
             fprintf(stdout, "\n✗ ViT block has significant differences between backends\n");
-            fprintf(stdout, "\nThis indicates a problem with one of the operations:\n");
-            fprintf(stdout, "  - LayerNorm\n");
-            fprintf(stdout, "  - QKV projection\n");
-            fprintf(stdout, "  - RoPE application\n");
-            fprintf(stdout, "  - Attention computation\n");
-            fprintf(stdout, "  - MLP layers\n");
-            fprintf(stdout, "  - Residual connections\n");
+            fprintf(stdout, "\nThis indicates a problem with RoPE operations:\n");
+            fprintf(stdout, "  - ggml_reshape_4d\n");
+            fprintf(stdout, "  - ggml_view_4d (stride calculation)\n");
+            fprintf(stdout, "  - ggml_concat\n");
             return 1;
         }
     } else {
@@ -574,8 +588,7 @@ int main(int argc, char* argv[]) {
             fprintf(stdout, "\n=== Vulkan Backend Diagnostics ===\n");
             fprintf(stdout, "Check for:\n");
             fprintf(stdout, "  - Memory layout issues\n");
-            fprintf(stdout, "  - Numerical precision in attention\n");
-            fprintf(stdout, "  - RoPE computation correctness\n");
+            fprintf(stdout, "  - Numerical precision in RoPE\n");
         }
     }
 
