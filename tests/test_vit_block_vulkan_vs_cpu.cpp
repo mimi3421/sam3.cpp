@@ -339,24 +339,32 @@ bool test_vit_block_component(ggml_backend_t backend, const std::string& backend
         const int64_t B_cur = x->ne[3];
 
         // QKV projection
-        qkv_w_tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3*E, E);
+        // Note: sam3.cpp uses blk.qkv_w with shape [3*E, E] directly with x
+        // For ggml_mul_mat, we need to ensure dimensions are compatible
+        qkv_w_tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, E, 3*E);  // Transposed
         qkv_b_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3*E);
         ggml_set_input(qkv_w_tensor);
         ggml_set_input(qkv_b_tensor);
 
         if (component == "qkv") {
-            auto* cur = ggml_mul_mat(ctx, qkv_w_tensor, x);
+            // Reshape x to 3D: [E, W_cur*H_cur*B_cur, 1] for proper matrix multiplication
+            auto* x_reshaped = ggml_reshape_3d(ctx, x, E, W_cur * H_cur * B_cur, 1);
+            auto* cur = ggml_mul_mat(ctx, qkv_w_tensor, x_reshaped);
             cur = ggml_add(ctx, cur, qkv_b_tensor);
             ggml_set_name(cur, "qkv_output");
             ggml_set_output(cur);
             x = cur;
         } else {
-            auto* cur = ggml_mul_mat(ctx, qkv_w_tensor, x);
+            // Reshape x to 3D: [E, W_cur*H_cur*B_cur, 1] for proper matrix multiplication
+            auto* x_reshaped = ggml_reshape_3d(ctx, x, E, W_cur * H_cur * B_cur, 1);
+            auto* cur = ggml_mul_mat(ctx, qkv_w_tensor, x_reshaped);
             cur = ggml_add(ctx, cur, qkv_b_tensor);
 
             // Reshape and permute for Q, K, V
+            // cur is now [3*E, W_cur*H_cur*B_cur, 1], need to reshape to [E, 3, W_cur*H_cur, B_cur]
             cur = ggml_reshape_4d(ctx, cur, E, 3, W_cur * H_cur, B_cur);
             cur = ggml_cont(ctx, ggml_permute(ctx, cur, 0, 3, 1, 2));
+            // cur: [E, W*H, B_cur, 3]  (ne[3]=3 separates Q/K/V)
 
             auto* Q = ggml_view_3d(ctx, cur, E, W_cur * H_cur, B_cur,
                                    cur->nb[1], cur->nb[2], 0);
@@ -419,13 +427,21 @@ bool test_vit_block_component(ggml_backend_t backend, const std::string& backend
                     ggml_set_input(proj_b_tensor);
 
                     if (component == "proj") {
-                        x = ggml_mul_mat(ctx, proj_w_tensor, x);
+                        // Reshape x to 3D: [E, W_cur*H_cur*B_cur, 1] for proper matrix multiplication
+                        auto* x_reshaped = ggml_reshape_3d(ctx, x, E, W_cur * H_cur * B_cur, 1);
+                        x = ggml_mul_mat(ctx, proj_w_tensor, x_reshaped);
                         x = ggml_add(ctx, x, proj_b_tensor);
+                        // Reshape back to 4D
+                        x = ggml_reshape_4d(ctx, x, E, W_cur, H_cur, B_cur);
                         ggml_set_name(x, "proj_output");
                         ggml_set_output(x);
                     } else {
-                        x = ggml_mul_mat(ctx, proj_w_tensor, x);
+                        // Reshape x to 3D: [E, W_cur*H_cur*B_cur, 1] for proper matrix multiplication
+                        auto* x_reshaped = ggml_reshape_3d(ctx, x, E, W_cur * H_cur * B_cur, 1);
+                        x = ggml_mul_mat(ctx, proj_w_tensor, x_reshaped);
                         x = ggml_add(ctx, x, proj_b_tensor);
+                        // Reshape back to 4D
+                        x = ggml_reshape_4d(ctx, x, E, W_cur, H_cur, B_cur);
 
                         if (!is_global) {
                             x = ggml_win_unpart(ctx, x, w0, h0, WS);
@@ -459,19 +475,31 @@ bool test_vit_block_component(ggml_backend_t backend, const std::string& backend
                             ggml_set_input(mlp_fc2_b_tensor);
 
                             if (component == "mlp") {
-                                x = ggml_mul_mat(ctx, mlp_fc1_w_tensor, x);
+                                // Reshape x to 3D: [E, W_cur*H_cur*B_cur, 1] for proper matrix multiplication
+                                auto* x_reshaped = ggml_reshape_3d(ctx, x, E, W_cur * H_cur * B_cur, 1);
+                                x = ggml_mul_mat(ctx, mlp_fc1_w_tensor, x_reshaped);
                                 x = ggml_add(ctx, x, mlp_fc1_b_tensor);
                                 x = ggml_gelu_erf(ctx, x);
+                                // Reshape back to 3D for second layer: [mlp_dim, W_cur*H_cur*B_cur, 1]
+                                x = ggml_reshape_3d(ctx, x, mlp_dim, W_cur * H_cur * B_cur, 1);
                                 x = ggml_mul_mat(ctx, mlp_fc2_w_tensor, x);
                                 x = ggml_add(ctx, x, mlp_fc2_b_tensor);
+                                // Reshape back to 4D
+                                x = ggml_reshape_4d(ctx, x, E, W_cur, H_cur, B_cur);
                                 ggml_set_name(x, "mlp_output");
                                 ggml_set_output(x);
                             } else {
-                                x = ggml_mul_mat(ctx, mlp_fc1_w_tensor, x);
+                                // Reshape x to 3D: [E, W_cur*H_cur*B_cur, 1] for proper matrix multiplication
+                                auto* x_reshaped = ggml_reshape_3d(ctx, x, E, W_cur * H_cur * B_cur, 1);
+                                x = ggml_mul_mat(ctx, mlp_fc1_w_tensor, x_reshaped);
                                 x = ggml_add(ctx, x, mlp_fc1_b_tensor);
                                 x = ggml_gelu_erf(ctx, x);
+                                // Reshape back to 3D for second layer: [mlp_dim, W_cur*H_cur*B_cur, 1]
+                                x = ggml_reshape_3d(ctx, x, mlp_dim, W_cur * H_cur * B_cur, 1);
                                 x = ggml_mul_mat(ctx, mlp_fc2_w_tensor, x);
                                 x = ggml_add(ctx, x, mlp_fc2_b_tensor);
+                                // Reshape back to 4D
+                                x = ggml_reshape_4d(ctx, x, E, W_cur, H_cur, B_cur);
                                 x = ggml_add(ctx, shortcut, x);
                                 ggml_set_name(x, "block_output");
                                 ggml_set_output(x);
