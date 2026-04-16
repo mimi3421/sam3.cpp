@@ -347,6 +347,8 @@ bool test_vit_block_component(ggml_backend_t backend, const std::string& backend
         ggml_set_input(qkv_b_tensor);
 
         if (component == "qkv") {
+			// 1. 强制将 x 转为连续内存布局（Vulkan 等 GPU 后端必需）
+			x = ggml_cont(ctx, x); 
             // Reshape x to 3D: [E, W_cur*H_cur*B_cur, 1] for proper matrix multiplication
             auto* x_reshaped = ggml_reshape_3d(ctx, x, E, W_cur * H_cur * B_cur, 1);
             auto* cur = ggml_mul_mat(ctx, qkv_w_tensor, x_reshaped);
