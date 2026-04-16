@@ -3760,7 +3760,15 @@ static struct ggml_tensor* sam3_vit_block_forward(struct ggml_context* ctx,
 
     if (!is_global) {
         // Window partition: [E, W, H, B] → [E, WS, WS, B*num_windows]
-        x = ggml_win_part(ctx, x, WS);
+        //x = ggml_win_part(ctx, x, WS);
+		// Using reshape+permute (same approach as SAM2) instead of ggml_win_part
+		// which lacks a CUDA kernel.
+		const int64_t W = x->ne[1], H = x->ne[2], B = x->ne[3];
+		const int64_t nW_w = W / WS, nW_h = H / WS;
+		auto* r1 = ggml_reshape_4d(ctx, x, E * WS, nW_w, H, B);
+		auto* p1 = ggml_cont(ctx, ggml_permute(ctx, r1, 0, 2, 1, 3));
+		auto* r2 = ggml_reshape_4d(ctx, p1, E * WS, WS, nW_h, nW_w * B);
+		x = ggml_reshape_4d(ctx, r2, E, WS, WS, nW_w * nW_h * B);
     }
 
     const int64_t W_cur = x->ne[1];
@@ -3814,7 +3822,15 @@ static struct ggml_tensor* sam3_vit_block_forward(struct ggml_context* ctx,
     }
 
     if (!is_global) {
-        x = ggml_win_unpart(ctx, x, w0, h0, WS);
+        //x = ggml_win_unpart(ctx, x, w0, h0, WS);
+		// Window unpartition: [E, WS, WS, nW*B] → [E, w0, h0, B]
+		// Reverse of the reshape+permute partition above.
+		const int64_t B = 1;  // batch size is always 1
+		const int64_t nW_w = w0 / WS, nW_h = h0 / WS;
+		auto* r1 = ggml_reshape_4d(ctx, x, E * WS, WS, nW_h, nW_w * B);
+		auto* r2 = ggml_reshape_4d(ctx, r1, E * WS, h0, nW_w, B);
+		auto* p1 = ggml_cont(ctx, ggml_permute(ctx, r2, 0, 2, 1, 3));
+		x = ggml_reshape_4d(ctx, p1, E, w0, h0, B);
     }
 
     x = ggml_add(ctx, shortcut, x);
@@ -6865,7 +6881,17 @@ static struct ggml_tensor * sam3_build_vit_block_stage_from_input(struct ggml_co
             return sam3_layer_norm(ctx, input, blk.norm1_w, blk.norm1_b);
 
         case SAM3_VIT_BLOCK_STAGE_WINDOW_PART:
-            return ggml_win_part(ctx, input, hp.vit_window_size);
+            //return ggml_win_part(ctx, input, hp.vit_window_size);
+            // Reshape+permute window partition (CUDA-compatible, no ggml_win_part)
+            const int E = hp.vit_embed_dim;
+            const int WS = hp.vit_window_size;
+            const int64_t W = input->ne[1], H = input->ne[2], B = input->ne[3];
+            const int64_t nW_w = W / WS, nW_h = H / WS;
+            auto* r1 = ggml_reshape_4d(ctx, input, E * WS, nW_w, H, B);
+            auto* p1 = ggml_cont(ctx, ggml_permute(ctx, r1, 0, 2, 1, 3));
+            auto* r2 = ggml_reshape_4d(ctx, p1, E * WS, WS, nW_h, nW_w * B);
+            return ggml_reshape_4d(ctx, r2, E, WS, WS, nW_w * nW_h * B);
+        }
 
         case SAM3_VIT_BLOCK_STAGE_QKV_PROJ:
             return ggml_add(ctx, ggml_mul_mat(ctx, blk.qkv_w, input), blk.qkv_b);
@@ -6877,7 +6903,18 @@ static struct ggml_tensor * sam3_build_vit_block_stage_from_input(struct ggml_co
             return ggml_add(ctx, ggml_mul_mat(ctx, blk.proj_w, input), blk.proj_b);
 
         case SAM3_VIT_BLOCK_STAGE_WINDOW_UNPART:
-            return ggml_win_unpart(ctx, input, hp.n_img_embd(), hp.n_img_embd(), hp.vit_window_size);
+            //return ggml_win_unpart(ctx, input, hp.n_img_embd(), hp.n_img_embd(), hp.vit_window_size);
+            // Reshape+permute window unpartition (CUDA-compatible, no ggml_win_unpart)
+            const int E = hp.vit_embed_dim;
+            const int WS = hp.vit_window_size;
+            const int64_t w0 = hp.n_img_embd(), h0 = hp.n_img_embd();
+            const int64_t B = 1;
+            const int64_t nW_w = w0 / WS, nW_h = h0 / WS;
+            auto* r1 = ggml_reshape_4d(ctx, input, E * WS, WS, nW_h, nW_w * B);
+            auto* r2 = ggml_reshape_4d(ctx, r1, E * WS, h0, nW_w, B);
+            auto* p1 = ggml_cont(ctx, ggml_permute(ctx, r2, 0, 2, 1, 3));
+            return ggml_reshape_4d(ctx, p1, E, w0, h0, B);
+        }
 
         case SAM3_VIT_BLOCK_STAGE_NORM2:
             return sam3_layer_norm(ctx, input, blk.norm2_w, blk.norm2_b);
