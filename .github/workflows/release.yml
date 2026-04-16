@@ -96,6 +96,30 @@ jobs:
           # 清理临时文件
           Remove-Item $zipFile -Force
       # ============================================
+        
+      # ================= 新增步骤 =================
+      - name: Download new ggml (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $targetDir = "./"
+          $zipUrl = "https://github.com/peters/ggml/archive/04623efff58b250559df935bf167e0fe9013e6c4.zip"
+          $zipFile = "ggml.zip"
+
+          # 删除旧的ggml
+          Remove-Item -Path "ggml" -Recurse -Force
+          # 确保目标目录存在
+          New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+          # 下载 zip
+          Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile
+          # 解压到目标目录
+          Expand-Archive -Path $zipFile -DestinationPath $targetDir -Force
+          # 重命名解压后的文件夹
+          Rename-Item -Path "$targetDir/ggml-04623efff58b250559df935bf167e0fe9013e6c4" -NewName "ggml"
+          # 清理临时文件
+          Remove-Item $zipFile -Force
+      # ============================================
       
       - name: Configure
         run: >
