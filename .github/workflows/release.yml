@@ -211,4 +211,5 @@ jobs:
             artifacts/sam3-linux-x86_64/*.tar.gz
             artifacts/sam3-linux-arm64/*.tar.gz
             artifacts/sam3-win-x86_64/*.zip
+            artifacts/sam3-win-x86_64-vulkan/*.zip
 
