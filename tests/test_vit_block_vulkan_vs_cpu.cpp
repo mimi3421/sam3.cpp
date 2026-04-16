@@ -331,7 +331,16 @@ bool test_vit_block_component(ggml_backend_t backend, const std::string& backend
         const int64_t h0 = x->ne[2];
 
         if (!is_global) {
-            x = ggml_win_part(ctx, x, WS);
+			// Window partition: [E, W, H, B] → [E, WS, WS, B*num_windows]
+			// Using reshape+permute (same approach as SAM2) instead of ggml_win_part
+			// which lacks a CUDA kernel.
+            //x = ggml_win_part(ctx, x, WS);
+			const int64_t W = x->ne[1], H = x->ne[2], B = x->ne[3];
+			const int64_t nW_w = W / WS, nW_h = H / WS;
+			auto* r1 = ggml_reshape_4d(ctx, x, E * WS, nW_w, H, B);
+			auto* p1 = ggml_cont(ctx, ggml_permute(ctx, r1, 0, 2, 1, 3));
+			auto* r2 = ggml_reshape_4d(ctx, p1, E * WS, WS, nW_h, nW_w * B);
+			x = ggml_reshape_4d(ctx, r2, E, WS, WS, nW_w * nW_h * B);
         }
 
         const int64_t W_cur = x->ne[1];
@@ -347,8 +356,6 @@ bool test_vit_block_component(ggml_backend_t backend, const std::string& backend
         ggml_set_input(qkv_b_tensor);
 
         if (component == "qkv") {
-			// 1. 强制将 x 转为连续内存布局（Vulkan 等 GPU 后端必需）
-			x = ggml_cont(ctx, x); 
             // Reshape x to 3D: [E, W_cur*H_cur*B_cur, 1] for proper matrix multiplication
             auto* x_reshaped = ggml_reshape_3d(ctx, x, E, W_cur * H_cur * B_cur, 1);
             auto* cur = ggml_mul_mat(ctx, qkv_w_tensor, x_reshaped);
@@ -446,7 +453,15 @@ bool test_vit_block_component(ggml_backend_t backend, const std::string& backend
                         x = ggml_reshape_4d(ctx, x, E, W_cur, H_cur, B_cur);
 
                         if (!is_global) {
-                            x = ggml_win_unpart(ctx, x, w0, h0, WS);
+                            //x = ggml_win_unpart(ctx, x, w0, h0, WS);
+							// Window unpartition: [E, WS, WS, nW*B] → [E, w0, h0, B]
+							// Reverse of the reshape+permute partition above.
+							const int64_t B = 1;  // batch size is always 1
+							const int64_t nW_w = w0 / WS, nW_h = h0 / WS;
+							auto* r1 = ggml_reshape_4d(ctx, x, E * WS, WS, nW_h, nW_w * B);
+							auto* r2 = ggml_reshape_4d(ctx, r1, E * WS, h0, nW_w, B);
+							auto* p1 = ggml_cont(ctx, ggml_permute(ctx, r2, 0, 2, 1, 3));
+							x = ggml_reshape_4d(ctx, p1, E, w0, h0, B);
                         }
 
                         x = ggml_add(ctx, shortcut, x);
