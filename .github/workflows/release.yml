@@ -22,7 +22,7 @@ jobs:
             os: windows-latest
             build: vulkan-x64
             artifact: sam3-win-x86_64-vulkan
-            cmake_args: "-DSAM3_BUILD_EXAMPLES=ON -DSAM3_BUILD_TESTS=ON -DGGML_METAL=OFF -DSAM3_METAL=OFF -DGGML_VULKAN=ON -DSAM3_VULKAN=ON -DBUILD_SHARED_LIBS=OFF -A x64"
+            cmake_args: "-DSAM3_BUILD_EXAMPLES=ON -DSAM3_BUILD_TESTS=OFF -DGGML_METAL=OFF -DSAM3_METAL=OFF -DGGML_VULKAN=ON -DSAM3_VULKAN=ON -DBUILD_SHARED_LIBS=OFF -A x64"
             build_args: "--config Release"
             ext: zip
 #          - name: Windows x86_64
@@ -195,14 +195,7 @@ jobs:
         id: tag
         shell: bash
         run: |
-          BUILD_NUMBER="$(git rev-list --count HEAD)"
-          SHORT_HASH="$(git rev-parse --short=7 HEAD)"
-          if [[ "${{ github.ref_name }}" == "main" ]]; then
-            echo "name=b${BUILD_NUMBER}" >> $GITHUB_OUTPUT
-          else
-            SAFE_NAME=$(echo "${{ github.ref_name }}" | tr '/' '-')
-            echo "name=${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}" >> $GITHUB_OUTPUT
-          fi
+          echo "name=$(date +"%Y%m%d_%H%M%S")" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
