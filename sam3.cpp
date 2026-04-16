@@ -6880,7 +6880,7 @@ static struct ggml_tensor * sam3_build_vit_block_stage_from_input(struct ggml_co
         case SAM3_VIT_BLOCK_STAGE_NORM1:
             return sam3_layer_norm(ctx, input, blk.norm1_w, blk.norm1_b);
 
-        case SAM3_VIT_BLOCK_STAGE_WINDOW_PART:
+        case SAM3_VIT_BLOCK_STAGE_WINDOW_PART: {
             //return ggml_win_part(ctx, input, hp.vit_window_size);
             // Reshape+permute window partition (CUDA-compatible, no ggml_win_part)
             const int E = hp.vit_embed_dim;
@@ -6902,7 +6902,7 @@ static struct ggml_tensor * sam3_build_vit_block_stage_from_input(struct ggml_co
         case SAM3_VIT_BLOCK_STAGE_ATTN_PROJ:
             return ggml_add(ctx, ggml_mul_mat(ctx, blk.proj_w, input), blk.proj_b);
 
-        case SAM3_VIT_BLOCK_STAGE_WINDOW_UNPART:
+        case SAM3_VIT_BLOCK_STAGE_WINDOW_UNPART: {
             //return ggml_win_unpart(ctx, input, hp.n_img_embd(), hp.n_img_embd(), hp.vit_window_size);
             // Reshape+permute window unpartition (CUDA-compatible, no ggml_win_unpart)
             const int E = hp.vit_embed_dim;
