@@ -22,7 +22,7 @@ jobs:
             os: windows-latest
             build: vulkan-x64
             artifact: sam3-win-x86_64-vulkan
-            cmake_args: "-DGGML_METAL=OFF -DSAM3_METAL=OFF -DSAM3_BUILD_TESTS=ON -DGGML_VULKAN=ON -DSAM3_VULKAN=ON -DBUILD_SHARED_LIBS=OFF -A x64"
+            cmake_args: "-DSAM3_BUILD_EXAMPLES=OFF -DSAM3_BUILD_TESTS=ON -DGGML_METAL=OFF -DSAM3_METAL=OFF -DGGML_VULKAN=ON -DSAM3_VULKAN=ON -DBUILD_SHARED_LIBS=OFF -A x64"
             build_args: "--config Release"
             ext: zip
 #          - name: Windows x86_64
