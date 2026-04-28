@@ -30,6 +30,32 @@ target_include_directories(sam3 PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/stb
 )
+
+# VideoFrameExtractor static library
+if(WIN32 AND DEFINED FFMPEG_ROOT)
+    set(FFMPEG_INCLUDE_DIRS "${FFMPEG_ROOT}/include")
+    set(FFMPEG_LIBRARIES_DIR "${FFMPEG_ROOT}/lib")
+    set(FFMPEG_LIBRARIES "${FFMPEG_LIBRARIES_DIR}/avcodec.lib" "${FFMPEG_LIBRARIES_DIR}/avformat.lib" "${FFMPEG_LIBRARIES_DIR}/avutil.lib" "${FFMPEG_LIBRARIES_DIR}/swscale.lib")
+    message(STATUS "Using manual FFmpeg path: ${FFMPEG_ROOT}")
+
+	include_directories(
+		${FFMPEG_INCLUDE_DIRS}
+	)
+
+	add_library(VideoFrameExtractor
+		VideoFrameExtractor.cpp
+	)
+
+	target_include_directories(VideoFrameExtractor PUBLIC
+		${CMAKE_CURRENT_SOURCE_DIR}
+		${FFMPEG_INCLUDE_DIRS}
+	)
+
+	target_link_libraries(VideoFrameExtractor PUBLIC ${FFMPEG_LIBRARIES})
+
+endif()
+
+
 if(SAM3_VULKAN)
     target_link_libraries(sam3 PUBLIC Vulkan::Vulkan)
 endif()
