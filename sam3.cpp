@@ -47,6 +47,8 @@
 
 #include "stb_image_write.h"
 
+#include "VideoFrameExtractor.h"
+
 /* Logging: 0=silent, 1=summary timing, 2=verbose progress. Override with
    -DSAM3_LOG_LEVEL=0 at build time for zero-overhead silent builds. */
 #ifndef SAM3_LOG_LEVEL
@@ -12399,6 +12401,33 @@ sam3_image sam3_decode_video_frame(const std::string& video_path, int frame_inde
     return img;
 }
 
+sam3_image sam3_decode_video_frame_vfe(const vfe::VideoFrameExtractor& extractor, int frame_index) {
+    sam3_image img;
+	
+    if (!extractor->isOpen()) return img;
+	
+    img.width = extractor->getWidth();
+    img.height = extractor->getHeight();
+    img.channels = 3;
+    img.data.resize(img.width * img.height * 3);
+
+
+    // Use ffmpeg to extract a single frame as raw RGB (frame-accurate)
+	auto frame = extractor.getFrameAt(frame_index);
+	if (!frame) {
+        img.data.clear();
+        return img;
+	}
+   
+    img.data = *frame.pixels->data();
+
+    if (frame.pixels->size() != img.data.size()) {
+        img.data.clear();
+    }
+
+    return img;
+}
+
 sam3_video_info sam3_get_video_info(const std::string& video_path) {
     sam3_video_info info;
 
@@ -12419,6 +12448,20 @@ sam3_video_info sam3_get_video_info(const std::string& video_path) {
         info.n_frames = nf;
     }
     pclose(fp);
+    return info;
+}
+}
+
+sam3_video_info sam3_get_video_info_vfe(const vfe::VideoFrameExtractor& extractor) {
+    sam3_video_info info;
+
+    if (!extractor->isOpen()) return info;
+
+	info.width = extractor->getWidth();
+	info.height = extractor->getHeight();
+	info.fps = (den > 0) ? static_cast<float>(extractor->getFrameCount()) / extractor->getDurationSec() : 0.0f;
+	info.n_frames = extractor->getFrameCount();
+		
     return info;
 }
 
