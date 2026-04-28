@@ -12419,9 +12419,9 @@ sam3_image sam3_decode_video_frame_vfe(const vfe::VideoFrameExtractor& extractor
         return img;
 	}
    
-    img.data = (*frame).pixels->data();
+    img.data = *frame->pixels;
 
-    if ((*frame).pixels->size() != img.data.size()) {
+    if (frame->pixels->size() != img.data.size()) {
         img.data.clear();
     }
 
