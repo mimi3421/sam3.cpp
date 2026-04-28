@@ -16,7 +16,7 @@ find_package(SDL2 QUIET)
 if(SDL2_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/CMakeLists.txt")
     add_subdirectory(third-party)
 	
-    add_executable(sam3_video_ffmpeg sam3_video_ffmpeg.cpp)
+    add_executable(sam3_video_ffmpeg main_video_ffmpeg.cpp)
     target_link_libraries(sam3_video_ffmpeg PRIVATE sam3 imgui-sdl2 SDL2::SDL2 VideoFrameExtractor)
 
     add_executable(sam3_image main_image.cpp)
