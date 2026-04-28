@@ -12449,7 +12449,7 @@ sam3_video_info sam3_get_video_info(const std::string& video_path) {
     }
     pclose(fp);
     return info;
-}
+
 }
 
 sam3_video_info sam3_get_video_info_vfe(const vfe::VideoFrameExtractor& extractor) {
