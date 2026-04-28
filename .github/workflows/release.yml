@@ -195,6 +195,13 @@ jobs:
           # DLL dependencies
           if (Test-Path "C:/vcpkg/installed/x64-windows/bin/SDL2.dll") { Copy-Item "C:/vcpkg/installed/x64-windows/bin/SDL2.dll" staging/${{ matrix.artifact }}/bin/ }
 
+          # FFMPEG DLL dependencies
+          foreach ($bin in @("avcodec","avdevice","avfilter","avformat","avutil","swresample","swscale")) {
+            $paths = @("C:/vcpkg/installed/x64-windows/bin/${bin}*")
+            foreach ($p in $paths) {
+              if (Test-Path $p) { Copy-Item $p staging/${{ matrix.artifact }}/bin/; break }
+            }
+          }
 
 
           Compress-Archive -Path staging/${{ matrix.artifact }} -DestinationPath ${{ matrix.artifact }}.zip
