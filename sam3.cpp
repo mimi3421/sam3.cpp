@@ -12404,10 +12404,10 @@ sam3_image sam3_decode_video_frame(const std::string& video_path, int frame_inde
 sam3_image sam3_decode_video_frame_vfe(const vfe::VideoFrameExtractor& extractor, int frame_index) {
     sam3_image img;
 	
-    if (!extractor->isOpen()) return img;
+    if (!extractor.isOpen()) return img;
 	
-    img.width = extractor->getWidth();
-    img.height = extractor->getHeight();
+    img.width = extractor.getWidth();
+    img.height = extractor.getHeight();
     img.channels = 3;
     img.data.resize(img.width * img.height * 3);
 
@@ -12419,9 +12419,9 @@ sam3_image sam3_decode_video_frame_vfe(const vfe::VideoFrameExtractor& extractor
         return img;
 	}
    
-    img.data = *frame.pixels->data();
+    img.data = (*frame).pixels->data();
 
-    if (frame.pixels->size() != img.data.size()) {
+    if ((*frame).pixels->size() != img.data.size()) {
         img.data.clear();
     }
 
@@ -12455,12 +12455,12 @@ sam3_video_info sam3_get_video_info(const std::string& video_path) {
 sam3_video_info sam3_get_video_info_vfe(const vfe::VideoFrameExtractor& extractor) {
     sam3_video_info info;
 
-    if (!extractor->isOpen()) return info;
+    if (!extractor.isOpen()) return info;
 
-	info.width = extractor->getWidth();
-	info.height = extractor->getHeight();
-	info.fps = (den > 0) ? static_cast<float>(extractor->getFrameCount()) / extractor->getDurationSec() : 0.0f;
-	info.n_frames = extractor->getFrameCount();
+	info.width = extractor.getWidth();
+	info.height = extractor.getHeight();
+	info.fps = (den > 0) ? static_cast<float>(extractor.getFrameCount()) / extractor.getDurationSec() : 0.0f;
+	info.n_frames = extractor.getFrameCount();
 		
     return info;
 }
