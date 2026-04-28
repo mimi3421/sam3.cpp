@@ -12459,7 +12459,7 @@ sam3_video_info sam3_get_video_info_vfe(const vfe::VideoFrameExtractor& extracto
 
 	info.width = extractor.getWidth();
 	info.height = extractor.getHeight();
-	info.fps = (den > 0) ? static_cast<float>(extractor.getFrameCount()) / extractor.getDurationSec() : 0.0f;
+	info.fps = (extractor.getDurationSec() > 0) ? static_cast<float>(extractor.getFrameCount()) / extractor.getDurationSec() : 0.0f;
 	info.n_frames = extractor.getFrameCount();
 		
     return info;
