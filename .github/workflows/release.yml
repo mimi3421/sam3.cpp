@@ -78,7 +78,7 @@ jobs:
       - name: Install FFMPEG (Windows)
         if: runner.os == 'Windows'
         run: |
-          vcpkg install ffmpeg:x64-windows
+          vcpkg install ffmpeg:x64-windows-rel
         
       # ================= 新增步骤 =================
       - name: Download ImGui (Windows)
