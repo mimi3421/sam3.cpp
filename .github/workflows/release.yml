@@ -74,6 +74,11 @@ jobs:
           # SDL sdk
           vcpkg install sdl2:x64-windows
           #vcpkg install sdl2:x64-windows-static
+          
+      - name: Install FFMPEG (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          vcpkg install ffmpeg:x64-windows
         
       # ================= 新增步骤 =================
       - name: Download ImGui (Windows)
