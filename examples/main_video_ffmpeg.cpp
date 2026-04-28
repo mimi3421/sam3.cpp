@@ -122,7 +122,7 @@ struct vapp_state {
     // Video
     std::string             video_path;
     sam3_video_info         video_info;
-    vfe::VideoFrameExtractor video_extractor;
+    std::unique_ptr<vfe::VideoFrameExtractor> video_extractor;
 
     // Current frame
     sam3_image              frame;
@@ -507,7 +507,8 @@ int main(int argc, char** argv) {
 
     if (!app.video_path.empty()) {
 		// Load video
-		app.video_extractor = vfe::VideoFrameExtractor(app.video_path);
+		//app.video_extractor = vfe::VideoFrameExtractor(app.video_path);
+		app.video_extractor = std::make_unique<vfe::VideoFrameExtractor>(app.video_path);
 		
         //app.video_info = sam3_get_video_info(app.video_path);
         app.video_info = sam3_get_video_info_vfe(app.video_extractor);
