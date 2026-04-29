@@ -35,6 +35,7 @@ if(WIN32 AND FFMPEG_FOUND)
 	include_directories(${FFMPEG_INCLUDE_DIRS})
 
 	add_library(VideoFrameExtractor VideoFrameExtractor.cpp)
+	target_compile_features(VideoFrameExtractor PRIVATE cxx_std_17)
 
 	target_include_directories(VideoFrameExtractor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${FFMPEG_INCLUDE_DIRS})
 
