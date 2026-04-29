@@ -253,7 +253,7 @@ static void create_tracker(vapp_state& app) {
 
 static void decode_and_track(vapp_state& app, int fi) {
     //app.frame = sam3_decode_video_frame(app.video_path, fi);
-    app.frame = sam3_decode_video_frame_vfe(app.video_extractor, fi);
+    app.frame = sam3_decode_video_frame_vfe(*app.video_extractor, fi);
     if (app.frame.data.empty()) {
         snprintf(app.status, sizeof(app.status), "Failed to decode frame %d.", fi);
         app.playing = false;
@@ -511,7 +511,7 @@ int main(int argc, char** argv) {
 		app.video_extractor = std::make_unique<vfe::VideoFrameExtractor>(app.video_path);
 		
         //app.video_info = sam3_get_video_info(app.video_path);
-        app.video_info = sam3_get_video_info_vfe(app.video_extractor);
+        app.video_info = sam3_get_video_info_vfe(*app.video_extractor);
         if (app.video_info.n_frames > 0) {
             // Auto-create tracker and encode first frame
             create_tracker(app);
@@ -519,7 +519,7 @@ int main(int argc, char** argv) {
                 decode_and_track(app, 0);
             } else {
                 //app.frame = sam3_decode_video_frame(app.video_path, 0);
-                app.frame = sam3_decode_video_frame_vfe(app.video_extractor, 0);
+                app.frame = sam3_decode_video_frame_vfe(*app.video_extractor, 0);
                 app.frame_index = 0;
             }
             snprintf(app.status, sizeof(app.status),
@@ -560,7 +560,7 @@ int main(int argc, char** argv) {
                 } else if (event.key.keysym.sym == SDLK_LEFT) {
                     if (app.frame_index > 0) {
                         //app.frame = sam3_decode_video_frame(app.video_path, app.frame_index - 1);
-                        app.frame = sam3_decode_video_frame_vfe(app.video_extractor, app.frame_index - 1);
+                        app.frame = sam3_decode_video_frame_vfe(*app.video_extractor, app.frame_index - 1);
                         app.frame_index--;
                         // The state's encoded features are now stale (they belong
                         // to the old frame).  Clear frame_encoded so that
@@ -672,7 +672,7 @@ int main(int argc, char** argv) {
                 decode_and_track(app, 0);
             } else if (!app.video_path.empty()) {
                 //app.frame = sam3_decode_video_frame(app.video_path, 0);
-                app.frame = sam3_decode_video_frame_vfe(app.video_extractor, 0);
+                app.frame = sam3_decode_video_frame_vfe(*app.video_extractor, 0);
             }
             snprintf(app.status, sizeof(app.status), "Reset. Ready to annotate.");
         }
@@ -972,7 +972,7 @@ int main(int argc, char** argv) {
                         decode_and_track(app, target);
                     } else {
                         //app.frame = sam3_decode_video_frame(app.video_path, target);
-                        app.frame = sam3_decode_video_frame_vfe(app.video_extractor, target);
+                        app.frame = sam3_decode_video_frame_vfe(*app.video_extractor, target);
                         app.frame_index = target;
                         app.frame_encoded = false;
                         app.result = {};
