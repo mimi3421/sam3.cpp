@@ -197,7 +197,7 @@ jobs:
           Get-ChildItem -Path ggml/include -Filter "*.h" | Copy-Item -Destination staging/${{ matrix.artifact }}/include/
 
           # Example binaries
-          foreach ($bin in @("sam3_quantize", "sam3_benchmark", "sam3_profile_edgetam", "sam3_image", "sam3_video")) {
+          foreach ($bin in @("sam3_quantize", "sam3_benchmark", "sam3_profile_edgetam", "sam3_image", "sam3_video", "sam3_video_ffmpeg")) {
             $paths = @("build/examples/Release/${bin}.exe", "build/examples/${bin}.exe")
             foreach ($p in $paths) {
               if (Test-Path $p) { Copy-Item $p staging/${{ matrix.artifact }}/bin/; break }
@@ -211,7 +211,7 @@ jobs:
 
           # FFMPEG DLL dependencies
           foreach ($bin in @("avcodec","avdevice","avfilter","avformat","avutil","swresample","swscale")) {
-            $paths = @("C:/vcpkg/installed/x64-windows/bin/${bin}*")
+            $paths = @("C:/vcpkg/installed/x64-windows/bin/${bin}*.dll")
             foreach ($p in $paths) {
               if (Test-Path $p) { Copy-Item $p staging/${{ matrix.artifact }}/bin/; break }
             }
