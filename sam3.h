@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "VideoFrameExtractor.h"
+
 /*
 ** ── Version ─────────────────────────────────────────────────────────────
 */
@@ -307,7 +309,9 @@ sam3_result sam3_propagate_frame(
 sam3_image      sam3_load_image(const std::string & path);
 bool            sam3_save_mask(const sam3_mask & mask, const std::string & path);
 sam3_image      sam3_decode_video_frame(const std::string & video_path, int frame_index);
+sam3_image sam3_decode_video_frame_vfe(const vfe::VideoFrameExtractor& extractor, int frame_index);
 sam3_video_info sam3_get_video_info(const std::string & video_path);
+sam3_video_info sam3_get_video_info_vfe(const vfe::VideoFrameExtractor& extractor);
 
 /*****************************************************************************
 ** Test and Debug API
