@@ -24,6 +24,26 @@ endif()
 
 add_subdirectory(ggml)
 
+# VideoFrameExtractor static library
+find_package(FFMPEG REQUIRED)
+if(WIN32 AND FFMPEG_FOUND)
+    #set(FFMPEG_INCLUDE_DIRS "${FFMPEG_ROOT}/include")
+    #set(FFMPEG_LIBRARIES_DIR "${FFMPEG_ROOT}/lib")
+    #set(FFMPEG_LIBRARIES "${FFMPEG_LIBRARIES_DIR}/avcodec.lib" "${FFMPEG_LIBRARIES_DIR}/avformat.lib" "${FFMPEG_LIBRARIES_DIR}/avutil.lib" "${FFMPEG_LIBRARIES_DIR}/swscale.lib")
+    #message(STATUS "Using manual FFmpeg path: ${FFMPEG_ROOT}")
+
+	include_directories(${FFMPEG_INCLUDE_DIRS})
+
+	add_library(VideoFrameExtractor VideoFrameExtractor.cpp)
+
+	target_include_directories(VideoFrameExtractor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${FFMPEG_INCLUDE_DIRS})
+
+	target_link_libraries(VideoFrameExtractor PUBLIC ${FFMPEG_LIBRARIES})
+	target_link_directories(VideoFrameExtractor PUBLIC ${FFMPEG_LIBRARY_DIRS})
+	
+endif()
+
+
 # sam3 static library
 add_library(sam3 STATIC sam3.cpp sam3.h)
 target_include_directories(sam3 PUBLIC
@@ -31,35 +51,11 @@ target_include_directories(sam3 PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/stb
 )
 
-# VideoFrameExtractor static library
-if(WIN32 AND DEFINED FFMPEG_ROOT)
-    set(FFMPEG_INCLUDE_DIRS "${FFMPEG_ROOT}/include")
-    set(FFMPEG_LIBRARIES_DIR "${FFMPEG_ROOT}/lib")
-    set(FFMPEG_LIBRARIES "${FFMPEG_LIBRARIES_DIR}/avcodec.lib" "${FFMPEG_LIBRARIES_DIR}/avformat.lib" "${FFMPEG_LIBRARIES_DIR}/avutil.lib" "${FFMPEG_LIBRARIES_DIR}/swscale.lib")
-    message(STATUS "Using manual FFmpeg path: ${FFMPEG_ROOT}")
-
-	include_directories(
-		${FFMPEG_INCLUDE_DIRS}
-	)
-
-	add_library(VideoFrameExtractor
-		VideoFrameExtractor.cpp
-	)
-
-	target_include_directories(VideoFrameExtractor PUBLIC
-		${CMAKE_CURRENT_SOURCE_DIR}
-		${FFMPEG_INCLUDE_DIRS}
-	)
-
-	target_link_libraries(VideoFrameExtractor PUBLIC ${FFMPEG_LIBRARIES})
-
-endif()
-
-
 if(SAM3_VULKAN)
     target_link_libraries(sam3 PUBLIC Vulkan::Vulkan)
 endif()
 target_link_libraries(sam3 PUBLIC ggml)
+target_link_libraries(sam3 PUBLIC VideoFrameExtractor)
 target_compile_features(sam3 PUBLIC cxx_std_14)
 
 
