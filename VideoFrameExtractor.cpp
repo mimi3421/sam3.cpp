@@ -249,7 +249,7 @@ std::shared_ptr<const FrameData> VideoFrameExtractor::getFrameAt(int frameIndex)
                     if (decoded_count == frameIndex) {
                         int rgb_stride = pImpl->width * 3;
                         //auto pixels = std::make_shared<std::vector<uint8_t>>(pImpl->height * pImpl->width * rgb_stride);
-                        auto pixels = std::make_shared<std::vector<uint8_t>>(pImpl->height * rgb_stride);
+                        auto pixels = std::make_shared<std::vector<uint8_t>>(pImpl->height * rgb_stride * 2); // in case sometimes pixels would be wider than pImpl->width in calculation
 
                         uint8_t* dest[4] = {pixels->data(), nullptr, nullptr, nullptr};
                         int dest_linesize[4] = {static_cast<int>(rgb_stride), 0, 0, 0};
